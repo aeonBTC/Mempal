@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">Mempal</string>
+    <string name="refresh">Refresh</string>
+    <!-- Add any other strings used in your layout -->
+</resources>
