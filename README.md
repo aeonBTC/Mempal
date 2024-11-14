@@ -1,2 +1,2 @@
 # Mempal
-A Bitocin mempool monitoring app for Android.
+A Bitcoin mempool monitoring app for Android.
