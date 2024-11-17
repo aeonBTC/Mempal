@@ -1,5 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Mempal</string>
-    <string name="refresh">Refresh</string>
-    <!-- Add any other strings used in your layout -->
+    <string name="blocks_title">Bitcoin Blocks</string>
+    <string name="blocks_description">Get notified when new blocks are mined.</string>
+    <string name="mempool_title">Mempool Size</string>
+    <string name="mempool_description">Get notified when mempool size falls below threshold.</string>
+    <string name="fee_rates_title">Fee Rates</string>
+    <string name="fee_rates_description">Get notified when fee rates fall below threshold.</string>
+    <string name="tx_confirmation_title">Transaction Confirmation</string>
+    <string name="tx_confirmation_description">Get notified when your transaction is confirmed.</string>
 </resources>
