@@ -1226,6 +1226,10 @@ private fun TransactionConfirmationSection(
 private fun SettingsScreen(modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val settingsRepository = remember { SettingsRepository.getInstance(context) }
+    val torManager = remember { TorManager.getInstance() }
+    val torStatus by torManager.torStatus.collectAsState()
+    var torEnabled by remember { mutableStateOf(torManager.isTorEnabled()) }
+
     var selectedOption by remember {
         mutableIntStateOf(
             if (settingsRepository.getApiUrl() == "https://mempool.space") 0 else 1
@@ -1246,6 +1250,11 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
     // Update the Button onClick handler
     fun handleSave() {
         val newUrl = if (selectedOption == 0) {
+            // When saving with default option, ensure Tor is disabled
+            if (torManager.isTorEnabled()) {
+                torManager.stopTor(context)
+                torEnabled = false
+            }
             "https://mempool.space"
         } else {
             customUrl.trim()
@@ -1293,57 +1302,27 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                 )
 
                 Column {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .selectable(
-                                selected = selectedOption == 0,
-                                onClick = {
-                                    selectedOption = 0
-                                }
-                            ),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(
-                            selected = selectedOption == 0,
-                            onClick = {
-                                selectedOption = 0
+                    RadioOption(
+                        text = "Default (mempool.space)",
+                        selected = selectedOption == 0,
+                        onClick = {
+                            selectedOption = 0
+                            customUrl = ""
+                            // Disable Tor when selecting default mempool.space
+                            if (torManager.isTorEnabled()) {
+                                torManager.stopTor(context)
+                                torEnabled = false
                             }
-                        )
-                        Text(
-                            text = "https://mempool.space",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = AppColors.DataGray,
-                            modifier = Modifier.padding(start = 8.dp)
-                        )
-                    }
+                        }
+                    )
 
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .selectable(
-                                selected = selectedOption == 1,
-                                onClick = { selectedOption = 1 }
-                            ),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        RadioButton(
-                            selected = selectedOption == 1,
-                            onClick = { selectedOption = 1 }
-                        )
-                        Text(
-                            text = "Custom API",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = AppColors.DataGray,
-                            modifier = Modifier.padding(start = 8.dp)
-                        )
-                    }
+                    RadioOption(
+                        text = "Custom API",
+                        selected = selectedOption == 1,
+                        onClick = { selectedOption = 1 }
+                    )
 
                     if (selectedOption == 1) {
-                        val torManager = remember { TorManager.getInstance() }
-                        val torStatus by torManager.torStatus.collectAsState()
-                        var torEnabled: Boolean by remember { mutableStateOf(torManager.isTorEnabled()) }
-
                         OutlinedTextField(
                             value = customUrl,
                             onValueChange = {
@@ -1470,6 +1449,36 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                     Text("Later")
                 }
             }
+        )
+    }
+}
+
+@Composable
+private fun RadioOption(
+    text: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(48.dp)  // Fixed height for consistent alignment
+            .selectable(selected = selected, onClick = onClick),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(
+            selected = selected,
+            onClick = null,
+            colors = RadioButtonDefaults.colors(
+                selectedColor = AppColors.Orange
+            ),
+            modifier = Modifier.padding(start = 16.dp)  // Consistent left padding
+        )
+        Text(
+            text = text,
+            style = MaterialTheme.typography.bodyLarge,
+            color = AppColors.DataGray,
+            modifier = Modifier.padding(start = 8.dp)
         )
     }
 }
