@@ -3,8 +3,13 @@ package com.example.mempal.tor
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
 import org.torproject.jni.TorService
 import java.io.File
 
@@ -23,6 +28,7 @@ class TorManager private constructor() {
     private lateinit var prefs: SharedPreferences
     private val _proxyReady = MutableStateFlow(false)
     val proxyReady: StateFlow<Boolean> = _proxyReady
+    private val scope = CoroutineScope(Dispatchers.Main + Job())
 
     companion object {
         @Volatile
@@ -67,9 +73,13 @@ class TorManager private constructor() {
                 putExtra("directory", dataDir?.absolutePath)
             }
             context.startService(intent)
-            _torStatus.value = TorStatus.CONNECTED
-            _proxyReady.value = true
-            prefs.edit().putBoolean(KEY_TOR_ENABLED, true).apply()
+
+            scope.launch {
+                delay(2000) // 2 second delay
+                _torStatus.value = TorStatus.CONNECTED
+                _proxyReady.value = true
+                prefs.edit().putBoolean(KEY_TOR_ENABLED, true).apply()
+            }
         } catch (e: Exception) {
             _torStatus.value = TorStatus.ERROR
             _proxyReady.value = false

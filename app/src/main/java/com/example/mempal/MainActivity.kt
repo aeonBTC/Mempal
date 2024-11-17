@@ -2,6 +2,7 @@ package com.example.mempal
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
@@ -19,6 +20,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -58,8 +60,6 @@ import androidx.compose.ui.window.Popup
 import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
-import androidx.compose.foundation.selection.selectable
-import android.app.Activity
 import com.example.mempal.api.FeeRates
 import com.example.mempal.api.MempoolInfo
 import com.example.mempal.api.Result
@@ -67,12 +67,12 @@ import com.example.mempal.model.FeeRateType
 import com.example.mempal.model.NotificationSettings
 import com.example.mempal.repository.SettingsRepository
 import com.example.mempal.service.NotificationService
+import com.example.mempal.tor.TorManager
+import com.example.mempal.tor.TorStatus
 import com.example.mempal.ui.theme.AppColors
 import com.example.mempal.ui.theme.MempalTheme
 import com.example.mempal.viewmodel.MainViewModel
 import java.util.Locale
-import com.example.mempal.tor.TorManager
-import com.example.mempal.tor.TorStatus
 
 
 data class NotificationSectionConfig(
@@ -360,37 +360,42 @@ private fun MainContentDisplay(
             value = blockHeight?.let {
                 String.format(Locale.US, "%,d", it)
             },
-            icon = Icons.Default.Numbers
+            icon = Icons.Default.Numbers,
+            isLoading = blockHeight == null
         )
+
         DataCard(
             title = "Mempool Size",
             value = mempoolInfo?.let {
                 String.format(Locale.US, "%.2f vMB", it.vsize / 1_000_000.0)
             },
-            icon = Icons.Default.Speed
+            icon = Icons.Default.Speed,
+            isLoading = mempoolInfo == null
         )
 
         DataCard(
             title = "Fee Rates (sat/vB)",
-            content = { FeeRatesContent(feeRates) },
+            content = if (feeRates != null) { { FeeRatesContent(feeRates) } } else null,
             icon = Icons.Default.CurrencyBitcoin,
             tooltip = "This section shows a rough average of recommended fees with varying confirmation times." +
                     "\n\n*Note: At times, a flood of transactions may enter the mempool and drastically push up fee rates. " +
                     "These floods are often temporary with only a few vMB worth of transactions that clear relatively quickly. " +
                     "In this scenario be sure to check the 'Fee Distribution' table to see how big the flood is and how quickly it will clear " +
-                    "to ensure you do not overpay fees."
+                    "to ensure you do not overpay fees.",
+            isLoading = feeRates == null
         )
 
         DataCard(
             title = "Fee Distribution",
-            content = { HistogramContent(mempoolInfo) },
+            content = if (mempoolInfo != null) { { HistogramContent(mempoolInfo) } } else null,
             icon = Icons.Default.BarChart,
             tooltip = "Fee Distribution shows a detailed breakdown of the mempool, giving you more insight into choosing the correct fee rate. " +
                     "\n\nRange Key:" +
                     "\n-Green will be confirmed in the next block." +
                     "\n-Yellow might be confirmed in the next block." +
                     "\n-Red will not be confirmed in the next block." +
-                    "\n\n*Note: Each Bitcoin block confirms about 1.5vMB worth of transactions."
+                    "\n\n*Note: Each Bitcoin block confirms about 1.5vMB worth of transactions.",
+            isLoading = mempoolInfo == null
         )
     }
 }
@@ -399,55 +404,69 @@ private fun MainContentDisplay(
 private fun DataCard(
     title: String,
     value: String? = null,
-    content: @Composable (() -> Unit)? = null,
+    content: (@Composable () -> Unit)? = null,
     icon: ImageVector,
     tooltip: String? = null,
+    isLoading: Boolean = value == null && content == null,
     @SuppressLint("ModifierParameter") modifier: Modifier = Modifier
 ) {
     Card(
         modifier = modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        colors = CardDefaults.cardColors(
+            containerColor = AppColors.DarkerNavy
+        )
     ) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 16.dp)
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            Box(
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.align(Alignment.CenterStart)
-                ) {
-                    Icon(
-                        imageVector = icon,
-                        contentDescription = null,
-                        modifier = Modifier.size(32.dp),
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                    Spacer(modifier = Modifier.width(12.dp))
-                    Text(
-                        text = title,
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    if (tooltip != null) {
-                        Spacer(modifier = Modifier.width(8.dp))
-                        TooltipButton(tooltip = tooltip)
-                    }
+                Icon(
+                    imageVector = icon,
+                    contentDescription = null,
+                    tint = AppColors.Orange,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AppColors.Orange
+                )
+                if (tooltip != null) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    TooltipButton(tooltip = tooltip)
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
-            if (value != null) {
-                Text(
-                    text = value,
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
+            if (isLoading) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    CircularProgressIndicator(
+                        color = AppColors.Orange,
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.dp
+                    )
+                }
             } else {
-                content?.invoke()
+                if (value != null) {
+                    Text(
+                        text = value,
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = AppColors.DataGray
+                    )
+                } else {
+                    content?.invoke()
+                }
             }
         }
     }
@@ -1394,14 +1413,19 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                                     torEnabled = enabled
                                     if (enabled) {
                                         torManager.startTor(context)
-                                        customUrl = "http://mempoolhqx4isw62xs7abwphsq7ldayuidyx2v2oethdhhj6mlo2r6ad.onion/"
+                                        if (customUrl.isEmpty()) {
+                                            customUrl = "http://mempoolhqx4isw62xs7abwphsq7ldayuidyx2v2oethdhhj6mlo2r6ad.onion/"
+                                        }
                                     } else {
                                         torManager.stopTor(context)
                                     }
                                 },
+                                enabled = torStatus != TorStatus.CONNECTING,
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = AppColors.Orange,
-                                    checkedTrackColor = AppColors.Orange.copy(alpha = 0.5f)
+                                    checkedTrackColor = AppColors.Orange.copy(alpha = 0.5f),
+                                    disabledCheckedThumbColor = AppColors.Orange.copy(alpha = 0.5f),
+                                    disabledCheckedTrackColor = AppColors.Orange.copy(alpha = 0.3f)
                                 )
                             )
                         }
@@ -1418,6 +1442,38 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                     Text("Save")
                 }
             }
+        }
+
+        Spacer(modifier = Modifier.weight(1f))
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp)
+        ) {
+            IconButton(
+                onClick = {
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        data = android.net.Uri.parse("https://github.com/aeonBTC/Mempal/")
+                    }
+                    context.startActivity(intent)
+                },
+                modifier = Modifier.size(28.dp)
+            ) {
+                Icon(
+                    painter = painterResource(id = R.drawable.ic_github),
+                    contentDescription = "GitHub Repository",
+                    tint = AppColors.Orange
+                )
+            }
+
+            Text(
+                text = "Mempal v${BuildConfig.VERSION_NAME}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = AppColors.DataGray
+            )
         }
     }
 
