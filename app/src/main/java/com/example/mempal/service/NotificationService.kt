@@ -1,17 +1,15 @@
 package com.example.mempal.service
 
+import android.annotation.SuppressLint
 import android.app.*
-import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
-import com.example.mempal.MainActivity
 import com.example.mempal.R
 import com.example.mempal.api.NetworkClient
-import com.example.mempal.repository.SettingsRepository
 import com.example.mempal.model.FeeRateType
-import com.example.mempal.model.NotificationSettings
+import com.example.mempal.repository.SettingsRepository
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 
@@ -49,10 +47,15 @@ class NotificationService : Service() {
                     checkNewBlocks()
                 }
 
+                if (settings.txConfirmationEnabled && settings.transactionId.isNotEmpty()) {
+                    checkTransactionConfirmation(settings.transactionId)
+                }
+
                 val shortestDelay = minOf(
                     if (settings.mempoolSizeNotificationsEnabled) settings.mempoolCheckFrequency else Int.MAX_VALUE,
                     if (settings.feeRatesNotificationsEnabled) settings.feeRatesCheckFrequency else Int.MAX_VALUE,
                     if (settings.blockNotificationsEnabled) settings.blockCheckFrequency else Int.MAX_VALUE,
+                    if (settings.txConfirmationEnabled) settings.txConfirmationFrequency else Int.MAX_VALUE,
                     1
                 )
 
@@ -61,15 +64,24 @@ class NotificationService : Service() {
         }
     }
 
+    @SuppressLint("DefaultLocale")
     private suspend fun checkMempoolSize(threshold: Float) {
         try {
+            val settings = settingsRepository.settings.first()
+            if (settings.hasNotifiedForMempoolSize) {
+                return
+            }
+
             val mempoolInfo = api.getMempoolInfo()
             if (mempoolInfo.isSuccessful) {
                 val currentSize = mempoolInfo.body()?.vsize?.toFloat()?.div(1_000_000f) ?: return
                 if (currentSize < threshold) {
                     showNotification(
                         "Mempool Size Alert",
-                        "Current mempool size is now below ${String.format("%.2f", currentSize)} vMB"
+                        "Mempool size has fallen below $threshold vMB and is now ${String.format("%.2f", currentSize)} vMB"
+                    )
+                    settingsRepository.updateSettings(
+                        settings.copy(hasNotifiedForMempoolSize = true)
                     )
                 }
             }
@@ -80,6 +92,11 @@ class NotificationService : Service() {
 
     private suspend fun checkFeeRates(feeRateType: FeeRateType, threshold: Int) {
         try {
+            val settings = settingsRepository.settings.first()
+            if (settings.hasNotifiedForFeeRate) {
+                return
+            }
+
             val feeRates = api.getFeeRates()
             if (feeRates.isSuccessful) {
                 val rates = feeRates.body() ?: return
@@ -87,11 +104,21 @@ class NotificationService : Service() {
                     FeeRateType.NEXT_BLOCK -> rates.fastestFee
                     FeeRateType.TWO_BLOCKS -> rates.halfHourFee
                     FeeRateType.FOUR_BLOCKS -> rates.hourFee
+                    FeeRateType.DAY_BLOCKS -> rates.economyFee
                 }
                 if (currentRate < threshold) {
+                    val feeRateTypeString = when (feeRateType) {
+                        FeeRateType.NEXT_BLOCK -> "Next Block"
+                        FeeRateType.TWO_BLOCKS -> "2 Block"
+                        FeeRateType.FOUR_BLOCKS -> "4 Block"
+                        FeeRateType.DAY_BLOCKS -> "1 Day"
+                    }
                     showNotification(
                         "Fee Rate Alert",
-                        "Current fee rate is now below $currentRate sat/vB"
+                        "$feeRateTypeString fee rate has fallen below $threshold sat/vB and is currently at $currentRate sat/vB)"
+                    )
+                    settingsRepository.updateSettings(
+                        settings.copy(hasNotifiedForFeeRate = true)
                     )
                 }
             }
@@ -118,6 +145,31 @@ class NotificationService : Service() {
         }
     }
 
+    private suspend fun checkTransactionConfirmation(txid: String) {
+        try {
+            val settings = settingsRepository.settings.first()
+            if (settings.hasNotifiedForCurrentTx) {
+                return
+            }
+
+            val response = api.getTransaction(txid)
+            if (response.isSuccessful) {
+                val transaction = response.body()
+                if (transaction?.status?.confirmed == true) {
+                    showNotification(
+                        "Transaction Confirmed",
+                        "Your transaction has been confirmed in block ${transaction.status.block_height}"
+                    )
+                    settingsRepository.updateSettings(
+                        settings.copy(hasNotifiedForCurrentTx = true)
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
     private fun createForegroundNotification(): Notification {
         return NotificationCompat.Builder(this, channelId)
             .setContentTitle("Mempal")
@@ -135,7 +187,7 @@ class NotificationService : Service() {
                 description = descriptionText
             }
             val notificationManager: NotificationManager =
-                getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+                getSystemService(NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.createNotificationChannel(channel)
         }
     }
@@ -148,11 +200,8 @@ class NotificationService : Service() {
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .build()
 
-        val notificationManager = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+        val notificationManager =
             getSystemService(NotificationManager::class.java)
-        } else {
-            getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        }
 
         notificationManager.notify(System.currentTimeMillis().toInt(), notification)
     }
@@ -160,6 +209,8 @@ class NotificationService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         serviceScope.cancel()
-        settingsRepository.updateSettings(NotificationSettings())
+        settingsRepository.settings.value.let { currentSettings ->
+            settingsRepository.updateSettings(currentSettings.copy(isServiceEnabled = false))
+        }
     }
 }

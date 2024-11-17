@@ -1,75 +1,112 @@
 package com.example.mempal
 
+import android.Manifest
 import android.annotation.SuppressLint
+import android.app.NotificationManager
+import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
-import androidx.compose.foundation.Image
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.runtime.livedata.observeAsState
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.unit.dp
-import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
-import androidx.core.view.WindowCompat
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.material3.HorizontalDivider
-import com.example.mempal.api.FeeRates
-import com.example.mempal.api.MempoolInfo
-import com.example.mempal.api.Result
-import com.example.mempal.ui.theme.MempalTheme
-import com.example.mempal.viewmodel.MainViewModel
-import androidx.compose.material.icons.filled.Info
-import androidx.compose.ui.window.Popup
-import java.util.Locale
-import androidx.compose.ui.graphics.Color
-import com.example.mempal.ui.theme.AppColors
-import androidx.compose.material3.NavigationBar
-import androidx.compose.material3.NavigationBarItem
-import androidx.compose.material3.NavigationBarItemDefaults
-import androidx.compose.material.icons.filled.Dashboard
-import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import com.example.mempal.service.NotificationService
-import android.Manifest
-import android.content.pm.PackageManager
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.Dashboard
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material3.*
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
-import com.example.mempal.model.NotificationSettings
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
-import com.example.mempal.model.FeeRateType
-import com.example.mempal.repository.SettingsRepository
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Switch
+import androidx.compose.runtime.*
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.livedata.observeAsState
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
-import android.os.Build
-import android.app.NotificationManager
-import android.content.Context
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Popup
+import androidx.core.content.ContextCompat
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
+import androidx.core.view.WindowCompat
+import androidx.compose.foundation.selection.selectable
+import android.app.Activity
+import com.example.mempal.api.FeeRates
+import com.example.mempal.api.MempoolInfo
+import com.example.mempal.api.Result
+import com.example.mempal.model.FeeRateType
+import com.example.mempal.model.NotificationSettings
+import com.example.mempal.repository.SettingsRepository
+import com.example.mempal.service.NotificationService
+import com.example.mempal.ui.theme.AppColors
+import com.example.mempal.ui.theme.MempalTheme
+import com.example.mempal.viewmodel.MainViewModel
+import java.util.Locale
+import com.example.mempal.tor.TorManager
+import com.example.mempal.tor.TorStatus
+
+
+data class NotificationSectionConfig(
+    val title: String,
+    val description: String,
+    val enabled: Boolean,
+    val frequency: Int,
+    val onEnabledChange: (Boolean) -> Unit,
+    val onFrequencyChange: (Int) -> Unit
+)
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
     private lateinit var settingsRepository: SettingsRepository
+
+    private val requestPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            // Permission granted, proceed with notifications
+            val settings = settingsRepository.settings.value
+            if (settings.isServiceEnabled == true) {
+                val serviceIntent = Intent(this, NotificationService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(serviceIntent)
+                } else {
+                    startService(serviceIntent)
+                }
+            }
+        } else {
+            // Permission denied
+            Toast.makeText(this, "Notifications disabled", Toast.LENGTH_SHORT).show()
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         val splashScreen = installSplashScreen()
@@ -82,8 +119,12 @@ class MainActivity : ComponentActivity() {
         viewModel.refreshData()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+            if (ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             }
         }
 
@@ -92,17 +133,6 @@ class MainActivity : ComponentActivity() {
         setContent {
             MempalTheme {
                 MainScreen(viewModel)
-            }
-        }
-    }
-
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 1) {
-            if ((grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED)) {
-                // Permission granted, proceed with notifications
-            } else {
-                // Permission denied, handle accordingly
             }
         }
     }
@@ -345,9 +375,9 @@ private fun MainContentDisplay(
             content = { FeeRatesContent(feeRates) },
             icon = Icons.Default.CurrencyBitcoin,
             tooltip = "This section shows a rough average of recommended fees with varying confirmation times." +
-                    "\n\n*At times, a flood of transactions may enter the mempool and drastically push up fee rates. " +
+                    "\n\n*Note: At times, a flood of transactions may enter the mempool and drastically push up fee rates. " +
                     "These floods are often temporary with only a few vMB worth of transactions that clear relatively quickly. " +
-                    "In this scenario be sure to check the Fee Distribution table to see how big the flood is and how quickly it will clear " +
+                    "In this scenario be sure to check the 'Fee Distribution' table to see how big the flood is and how quickly it will clear " +
                     "to ensure you do not overpay fees."
         )
 
@@ -356,10 +386,11 @@ private fun MainContentDisplay(
             content = { HistogramContent(mempoolInfo) },
             icon = Icons.Default.BarChart,
             tooltip = "Fee Distribution shows a detailed breakdown of the mempool, giving you more insight into choosing the correct fee rate. " +
-                    "\n\n-Green will be confirmed in the next block." +
+                    "\n\nRange Key:" +
+                    "\n-Green will be confirmed in the next block." +
                     "\n-Yellow might be confirmed in the next block." +
                     "\n-Red will not be confirmed in the next block." +
-                    "\n\n*Each Bitcoin block confirms about 1.5vMB worth of transactions."
+                    "\n\n*Note: Each Bitcoin block confirms about 1.5vMB worth of transactions."
         )
     }
 }
@@ -690,7 +721,7 @@ private fun NotificationsScreen(
         verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
         Text(
-            text = "Notification Settings",
+            text = "Notifications",
             style = MaterialTheme.typography.headlineMedium,
             color = AppColors.Orange
         )
@@ -722,35 +753,23 @@ private fun NotificationsScreen(
             )
         }
 
-        // Notification sections with updated styling
+        // Bitcoin Blocks section
         NotificationSection(
-            title = "Bitcoin Blocks",
-            description = "Get notified when new blocks are mined.",
-            enabled = settings.blockNotificationsEnabled,
-            frequency = settings.blockCheckFrequency,
-            onEnabledChange = { newSettings ->
-                settingsRepository.updateSettings(settings.copy(blockNotificationsEnabled = newSettings))
-            },
-            onFrequencyChange = { newSettings ->
-                settingsRepository.updateSettings(settings.copy(blockCheckFrequency = newSettings))
-            }
+            config = NotificationSectionConfig(
+                title = stringResource(R.string.blocks_title),
+                description = stringResource(R.string.blocks_description),
+                enabled = settings.blockNotificationsEnabled,
+                frequency = settings.blockCheckFrequency,
+                onEnabledChange = { newSettings ->
+                    settingsRepository.updateSettings(settings.copy(blockNotificationsEnabled = newSettings))
+                },
+                onFrequencyChange = { newSettings ->
+                    settingsRepository.updateSettings(settings.copy(blockCheckFrequency = newSettings))
+                }
+            )
         )
 
-        MempoolSizeNotificationSection(
-            enabled = settings.mempoolSizeNotificationsEnabled,
-            frequency = settings.mempoolCheckFrequency,
-            threshold = settings.mempoolSizeThreshold,
-            onEnabledChange = { newSettings ->
-                settingsRepository.updateSettings(settings.copy(mempoolSizeNotificationsEnabled = newSettings))
-            },
-            onFrequencyChange = { newSettings ->
-                settingsRepository.updateSettings(settings.copy(mempoolCheckFrequency = newSettings))
-            },
-            onThresholdChange = { newSettings ->
-                settingsRepository.updateSettings(settings.copy(mempoolSizeThreshold = newSettings))
-            }
-        )
-
+        // Fee Rates section
         FeeRatesNotificationSection(
             enabled = settings.feeRatesNotificationsEnabled,
             frequency = settings.feeRatesCheckFrequency,
@@ -762,11 +781,63 @@ private fun NotificationsScreen(
             onFrequencyChange = { newSettings ->
                 settingsRepository.updateSettings(settings.copy(feeRatesCheckFrequency = newSettings))
             },
-            onFeeRateTypeChange = { newSettings ->
-                settingsRepository.updateSettings(settings.copy(selectedFeeRateType = newSettings))
+            onFeeRateTypeChange = { newType ->
+                settingsRepository.updateSettings(
+                    settings.copy(
+                        selectedFeeRateType = newType,
+                        hasNotifiedForFeeRate = false
+                    )
+                )
             },
-            onThresholdChange = { newSettings ->
-                settingsRepository.updateSettings(settings.copy(feeRateThreshold = newSettings))
+            onThresholdChange = { newThreshold ->
+                settingsRepository.updateSettings(
+                    settings.copy(
+                        feeRateThreshold = newThreshold,
+                        hasNotifiedForFeeRate = false
+                    )
+                )
+            }
+        )
+
+        // Transaction Confirmation section
+        TransactionConfirmationSection(
+            enabled = settings.txConfirmationEnabled,
+            frequency = settings.txConfirmationFrequency,
+            transactionId = settings.transactionId,
+            onEnabledChange = { newSettings ->
+                settingsRepository.updateSettings(settings.copy(txConfirmationEnabled = newSettings))
+            },
+            onFrequencyChange = { newSettings ->
+                settingsRepository.updateSettings(settings.copy(txConfirmationFrequency = newSettings))
+            },
+            onTransactionIdChange = { newTxId ->
+                settingsRepository.updateSettings(
+                    settings.copy(
+                        transactionId = newTxId,
+                        hasNotifiedForCurrentTx = false
+                    )
+                )
+            }
+        )
+
+        // Mempool Size section (moved to bottom)
+        MempoolSizeNotificationSection(
+            enabled = settings.mempoolSizeNotificationsEnabled,
+            frequency = settings.mempoolCheckFrequency,
+            threshold = settings.mempoolSizeThreshold,
+            onEnabledChange = { newSettings ->
+                settingsRepository.updateSettings(settings.copy(mempoolSizeNotificationsEnabled = newSettings))
+            },
+            onFrequencyChange = { newSettings ->
+                settingsRepository.updateSettings(settings.copy(mempoolCheckFrequency = newSettings))
+            },
+            onThresholdChange = { newThreshold ->
+                settingsRepository.updateSettings(
+                    settings.copy(
+                        mempoolSizeThreshold = newThreshold,
+                        hasNotifiedForMempoolSize = false
+                    )
+                )
             }
         )
     }
@@ -774,12 +845,7 @@ private fun NotificationsScreen(
 
 @Composable
 private fun NotificationSection(
-    title: String,
-    description: String,
-    enabled: Boolean,
-    frequency: Int,
-    onEnabledChange: (Boolean) -> Unit,
-    onFrequencyChange: (Int) -> Unit
+    config: NotificationSectionConfig
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -791,7 +857,7 @@ private fun NotificationSection(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -799,54 +865,39 @@ private fun NotificationSection(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
-                    text = title,
+                    text = config.title,
                     style = MaterialTheme.typography.headlineMedium,
                     color = AppColors.Orange
                 )
                 Switch(
-                    checked = enabled,
-                    onCheckedChange = onEnabledChange
+                    checked = config.enabled,
+                    onCheckedChange = config.onEnabledChange
                 )
             }
             Text(
-                text = description,
+                text = config.description,
                 style = MaterialTheme.typography.titleMedium,
                 color = AppColors.DataGray
             )
-            if (enabled) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "Check every",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = AppColors.DataGray
+            if (config.enabled) {
+                OutlinedTextField(
+                    value = config.frequency.toString(),
+                    onValueChange = {
+                        it.toIntOrNull()?.let { value ->
+                            if (value > 0) config.onFrequencyChange(value)
+                        }
+                    },
+                    label = { Text("Check Frequency (minutes)", color = AppColors.DataGray) },
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    singleLine = true,
+                    colors = OutlinedTextFieldDefaults.colors(
+                        unfocusedBorderColor = AppColors.DataGray,
+                        focusedBorderColor = AppColors.Orange,
+                        unfocusedTextColor = AppColors.DataGray,
+                        focusedTextColor = AppColors.Orange
                     )
-                    OutlinedTextField(
-                        value = frequency.toString(),
-                        onValueChange = {
-                            it.toIntOrNull()?.let { value ->
-                                if (value > 0) onFrequencyChange(value)
-                            }
-                        },
-                        modifier = Modifier.width(80.dp),
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Number
-                        ),
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = AppColors.DataGray,
-                            focusedBorderColor = AppColors.Orange,
-                            unfocusedTextColor = AppColors.DataGray,
-                            focusedTextColor = AppColors.Orange
-                        )
-                    )
-                    Text(
-                        text = "minutes",
-                        color = AppColors.DataGray
-                    )
-                }
+                )
             }
         }
     }
@@ -871,7 +922,7 @@ private fun MempoolSizeNotificationSection(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -894,14 +945,26 @@ private fun MempoolSizeNotificationSection(
                 color = AppColors.DataGray
             )
             if (enabled) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    Text(
-                        text = "Check every",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = AppColors.DataGray
+                    OutlinedTextField(
+                        value = threshold.toString(),
+                        onValueChange = {
+                            it.toFloatOrNull()?.let { value ->
+                                if (value > 0) onThresholdChange(value)
+                            }
+                        },
+                        label = { Text("Threshold (vMB)", color = AppColors.DataGray) },
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedBorderColor = AppColors.DataGray,
+                            focusedBorderColor = AppColors.Orange,
+                            unfocusedTextColor = AppColors.DataGray,
+                            focusedTextColor = AppColors.Orange
+                        )
                     )
                     OutlinedTextField(
                         value = frequency.toString(),
@@ -910,10 +973,9 @@ private fun MempoolSizeNotificationSection(
                                 if (value > 0) onFrequencyChange(value)
                             }
                         },
-                        modifier = Modifier.width(80.dp),
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Number
-                        ),
+                        label = { Text("Check Frequency (minutes)", color = AppColors.DataGray) },
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
                             unfocusedBorderColor = AppColors.DataGray,
@@ -921,43 +983,6 @@ private fun MempoolSizeNotificationSection(
                             unfocusedTextColor = AppColors.DataGray,
                             focusedTextColor = AppColors.Orange
                         )
-                    )
-                    Text(
-                        text = "minutes",
-                        color = AppColors.DataGray
-                    )
-                }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "Threshold",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = AppColors.DataGray
-                    )
-                    OutlinedTextField(
-                        value = threshold.toString(),
-                        onValueChange = {
-                            it.toFloatOrNull()?.let { value ->
-                                if (value > 0) onThresholdChange(value)
-                            }
-                        },
-                        modifier = Modifier.width(80.dp),
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Number
-                        ),
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = AppColors.DataGray,
-                            focusedBorderColor = AppColors.Orange,
-                            unfocusedTextColor = AppColors.DataGray,
-                            focusedTextColor = AppColors.Orange
-                        )
-                    )
-                    Text(
-                        text = "vMB",
-                        color = AppColors.DataGray
                     )
                 }
             }
@@ -988,7 +1013,7 @@ private fun FeeRatesNotificationSection(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1011,14 +1036,167 @@ private fun FeeRatesNotificationSection(
                 color = AppColors.DataGray
             )
             if (enabled) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    Text(
-                        text = "Check every",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = AppColors.DataGray
+                    ExposedDropdownMenuBox(
+                        expanded = expanded,
+                        onExpandedChange = { expanded = !expanded }
+                    ) {
+                        OutlinedTextField(
+                            value = when (selectedFeeRateType) {
+                                FeeRateType.NEXT_BLOCK -> "Next Block"
+                                FeeRateType.TWO_BLOCKS -> "2 Blocks"
+                                FeeRateType.FOUR_BLOCKS -> "4 Blocks"
+                                FeeRateType.DAY_BLOCKS -> "1 Day"
+                            },
+                            label = { Text("Fee Rate", color = AppColors.DataGray) },
+                            onValueChange = {},
+                            readOnly = true,
+                            modifier = Modifier.menuAnchor().fillMaxWidth(),
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                unfocusedBorderColor = AppColors.DataGray,
+                                focusedBorderColor = AppColors.Orange,
+                                unfocusedTextColor = AppColors.DataGray,
+                                focusedTextColor = AppColors.Orange
+                            )
+                        )
+                        ExposedDropdownMenu(
+                            expanded = expanded,
+                            onDismissRequest = { expanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text("Next Block") },
+                                onClick = {
+                                    onFeeRateTypeChange(FeeRateType.NEXT_BLOCK)
+                                    expanded = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("2 Blocks") },
+                                onClick = {
+                                    onFeeRateTypeChange(FeeRateType.TWO_BLOCKS)
+                                    expanded = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("4 Blocks") },
+                                onClick = {
+                                    onFeeRateTypeChange(FeeRateType.FOUR_BLOCKS)
+                                    expanded = false
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text("1 Day") },
+                                onClick = {
+                                    onFeeRateTypeChange(FeeRateType.DAY_BLOCKS)
+                                    expanded = false
+                                }
+                            )
+                        }
+                    }
+
+                    OutlinedTextField(
+                        value = threshold.toString(),
+                        onValueChange = {
+                            it.toIntOrNull()?.let { value ->
+                                if (value > 0) onThresholdChange(value)
+                            }
+                        },
+                        label = { Text("Threshold (sat/vB)", color = AppColors.DataGray) },
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedBorderColor = AppColors.DataGray,
+                            focusedBorderColor = AppColors.Orange,
+                            unfocusedTextColor = AppColors.DataGray,
+                            focusedTextColor = AppColors.Orange
+                        )
+                    )
+
+                    OutlinedTextField(
+                        value = frequency.toString(),
+                        onValueChange = {
+                            it.toIntOrNull()?.let { value ->
+                                if (value > 0) onFrequencyChange(value)
+                            }
+                        },
+                        label = { Text("Check Frequency (minutes)", color = AppColors.DataGray) },
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedBorderColor = AppColors.DataGray,
+                            focusedBorderColor = AppColors.Orange,
+                            unfocusedTextColor = AppColors.DataGray,
+                            focusedTextColor = AppColors.Orange
+                        )
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TransactionConfirmationSection(
+    enabled: Boolean,
+    frequency: Int,
+    transactionId: String,
+    onEnabledChange: (Boolean) -> Unit,
+    onFrequencyChange: (Int) -> Unit,
+    onTransactionIdChange: (String) -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = AppColors.DarkerNavy
+        )
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Confirmation",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = AppColors.Orange
+                )
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = onEnabledChange
+                )
+            }
+            Text(
+                text = "Get notified when your transaction is confirmed.",
+                style = MaterialTheme.typography.titleMedium,
+                color = AppColors.DataGray
+            )
+            if (enabled) {
+                Column(
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                ) {
+                    OutlinedTextField(
+                        value = transactionId,
+                        onValueChange = onTransactionIdChange,
+                        label = { Text("Transaction ID", color = AppColors.DataGray) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedBorderColor = AppColors.DataGray,
+                            focusedBorderColor = AppColors.Orange,
+                            unfocusedTextColor = AppColors.DataGray,
+                            focusedTextColor = AppColors.Orange
+                        )
                     )
                     OutlinedTextField(
                         value = frequency.toString(),
@@ -1027,10 +1205,9 @@ private fun FeeRatesNotificationSection(
                                 if (value > 0) onFrequencyChange(value)
                             }
                         },
-                        modifier = Modifier.width(80.dp),
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Number
-                        ),
+                        label = { Text("Check Frequency (minutes)", color = AppColors.DataGray) },
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
                             unfocusedBorderColor = AppColors.DataGray,
@@ -1038,91 +1215,6 @@ private fun FeeRatesNotificationSection(
                             unfocusedTextColor = AppColors.DataGray,
                             focusedTextColor = AppColors.Orange
                         )
-                    )
-                    Text(
-                        text = "minutes",
-                        color = AppColors.DataGray
-                    )
-                }
-                ExposedDropdownMenuBox(
-                    expanded = expanded,
-                    onExpandedChange = { expanded = !expanded }
-                ) {
-                    OutlinedTextField(
-                        value = when (selectedFeeRateType) {
-                            FeeRateType.NEXT_BLOCK -> "Next Block"
-                            FeeRateType.TWO_BLOCKS -> "2 Blocks"
-                            FeeRateType.FOUR_BLOCKS -> "4 Blocks"
-                        },
-                        onValueChange = {},
-                        readOnly = true,
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                        modifier = Modifier.menuAnchor(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = AppColors.DataGray,
-                            focusedBorderColor = AppColors.Orange,
-                            unfocusedTextColor = AppColors.DataGray,
-                            focusedTextColor = AppColors.Orange
-                        )
-                    )
-                    ExposedDropdownMenu(
-                        expanded = expanded,
-                        onDismissRequest = { expanded = false }
-                    ) {
-                        DropdownMenuItem(
-                            text = { Text("Next Block") },
-                            onClick = {
-                                onFeeRateTypeChange(FeeRateType.NEXT_BLOCK)
-                                expanded = false
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("2 Blocks") },
-                            onClick = {
-                                onFeeRateTypeChange(FeeRateType.TWO_BLOCKS)
-                                expanded = false
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("4 Blocks") },
-                            onClick = {
-                                onFeeRateTypeChange(FeeRateType.FOUR_BLOCKS)
-                                expanded = false
-                            }
-                        )
-                    }
-                }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Text(
-                        text = "Threshold",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = AppColors.DataGray
-                    )
-                    OutlinedTextField(
-                        value = threshold.toString(),
-                        onValueChange = {
-                            it.toIntOrNull()?.let { value ->
-                                if (value > 0) onThresholdChange(value)
-                            }
-                        },
-                        modifier = Modifier.width(80.dp),
-                        keyboardOptions = KeyboardOptions(
-                            keyboardType = KeyboardType.Number
-                        ),
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = AppColors.DataGray,
-                            focusedBorderColor = AppColors.Orange,
-                            unfocusedTextColor = AppColors.DataGray,
-                            focusedTextColor = AppColors.Orange
-                        )
-                    )
-                    Text(
-                        text = "sat/vB",
-                        color = AppColors.DataGray
                     )
                 }
             }
@@ -1132,17 +1224,252 @@ private fun FeeRatesNotificationSection(
 
 @Composable
 private fun SettingsScreen(modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val settingsRepository = remember { SettingsRepository.getInstance(context) }
+    var selectedOption by remember {
+        mutableIntStateOf(
+            if (settingsRepository.getApiUrl() == "https://mempool.space") 0 else 1
+        )
+    }
+    var customUrl by remember { mutableStateOf(
+        if (settingsRepository.getApiUrl() != "https://mempool.space")
+            settingsRepository.getApiUrl() else ""
+    ) }
+    var showRestartDialog by remember { mutableStateOf(false) }
+    var showUrlError by remember { mutableStateOf(false) }
+
+    // URL validation function
+    fun isValidUrl(url: String): Boolean {
+        return url.startsWith("http://") || url.startsWith("https://")
+    }
+
+    // Update the Button onClick handler
+    fun handleSave() {
+        val newUrl = if (selectedOption == 0) {
+            "https://mempool.space"
+        } else {
+            customUrl.trim()
+        }
+
+        if (selectedOption == 1 && !isValidUrl(newUrl)) {
+            showUrlError = true
+            return
+        }
+
+        showUrlError = false
+        settingsRepository.saveApiUrl(newUrl)
+        showRestartDialog = true
+    }
+
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
+            .padding(16.dp)
+            .verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text(
-            text = "Settings Coming Soon",
+            text = "Settings",
             style = MaterialTheme.typography.headlineMedium,
-            color = MaterialTheme.colorScheme.onBackground
+            color = AppColors.Orange
+        )
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = AppColors.DarkerNavy
+            )
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    text = "Mempool API",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = AppColors.DataGray
+                )
+
+                Column {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .selectable(
+                                selected = selectedOption == 0,
+                                onClick = {
+                                    selectedOption = 0
+                                }
+                            ),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = selectedOption == 0,
+                            onClick = {
+                                selectedOption = 0
+                            }
+                        )
+                        Text(
+                            text = "https://mempool.space",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = AppColors.DataGray,
+                            modifier = Modifier.padding(start = 8.dp)
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .selectable(
+                                selected = selectedOption == 1,
+                                onClick = { selectedOption = 1 }
+                            ),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        RadioButton(
+                            selected = selectedOption == 1,
+                            onClick = { selectedOption = 1 }
+                        )
+                        Text(
+                            text = "Custom API",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = AppColors.DataGray,
+                            modifier = Modifier.padding(start = 8.dp)
+                        )
+                    }
+
+                    if (selectedOption == 1) {
+                        val torManager = remember { TorManager.getInstance() }
+                        val torStatus by torManager.torStatus.collectAsState()
+                        var torEnabled: Boolean by remember { mutableStateOf(torManager.isTorEnabled()) }
+
+                        OutlinedTextField(
+                            value = customUrl,
+                            onValueChange = {
+                                customUrl = it
+                                showUrlError = false
+
+                                // Auto-toggle Tor when onion address is detected
+                                if (it.contains(".onion")) {
+                                    if (!torEnabled) {
+                                        torEnabled = true
+                                        torManager.startTor(context)
+                                    }
+                                }
+                            },
+                            label = { Text(if (torEnabled) "Onion Address" else "API URL", color = AppColors.DataGray) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = AppColors.Orange,
+                                unfocusedBorderColor = AppColors.DataGray
+                            ),
+                            isError = showUrlError
+                        )
+
+                        if (showUrlError) {
+                            Text(
+                                text = "URL must start with http:// or https://",
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(start = 16.dp, top = 4.dp)
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column {
+                                Text(
+                                    text = "Use Tor",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = AppColors.DataGray
+                                )
+                                if (torEnabled) {
+                                    Text(
+                                        text = "Status: ${torStatus.name}",
+                                        color = when (torStatus) {
+                                            TorStatus.CONNECTED -> Color.Green
+                                            TorStatus.CONNECTING -> Color.Yellow
+                                            TorStatus.DISCONNECTED -> Color.Red
+                                            TorStatus.ERROR -> Color.Red
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        modifier = Modifier.padding(top = 4.dp)
+                                    )
+                                }
+                            }
+                            Switch(
+                                checked = torEnabled,
+                                onCheckedChange = { enabled ->
+                                    if (enabled && customUrl.isNotEmpty() && (!customUrl.startsWith("http://") && !customUrl.startsWith("https://"))) {
+                                        showUrlError = true
+                                        return@Switch
+                                    }
+                                    torEnabled = enabled
+                                    if (enabled) {
+                                        torManager.startTor(context)
+                                        customUrl = "http://mempoolhqx4isw62xs7abwphsq7ldayuidyx2v2oethdhhj6mlo2r6ad.onion/"
+                                    } else {
+                                        torManager.stopTor(context)
+                                    }
+                                },
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = AppColors.Orange,
+                                    checkedTrackColor = AppColors.Orange.copy(alpha = 0.5f)
+                                )
+                            )
+                        }
+                    }
+                }
+
+                Button(
+                    onClick = { handleSave() },
+                    modifier = Modifier.align(Alignment.End),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = AppColors.Orange
+                    )
+                ) {
+                    Text("Save")
+                }
+            }
+        }
+    }
+
+    if (showRestartDialog) {
+        AlertDialog(
+            onDismissRequest = { showRestartDialog = false },
+            title = {
+                Text("Restart Required")
+            },
+            text = {
+                Text("Please restart the app to apply the new API settings.")
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showRestartDialog = false
+                        val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
+                        intent?.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK)
+                        context.startActivity(intent)
+                        (context as? Activity)?.finishAffinity()
+                        Runtime.getRuntime().exit(0)
+                    }
+                ) {
+                    Text("Restart Now")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showRestartDialog = false }) {
+                    Text("Later")
+                }
+            }
         )
     }
 }
