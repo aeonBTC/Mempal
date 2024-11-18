@@ -55,6 +55,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.core.content.ContextCompat
@@ -73,6 +74,8 @@ import com.example.mempal.ui.theme.AppColors
 import com.example.mempal.ui.theme.MempalTheme
 import com.example.mempal.viewmodel.MainViewModel
 import java.util.Locale
+import com.example.mempal.api.NetworkClient
+import kotlinx.coroutines.launch
 
 
 data class NotificationSectionConfig(
@@ -142,9 +145,10 @@ class MainActivity : ComponentActivity() {
 private fun MainScreen(viewModel: MainViewModel) {
     var selectedTab by remember { mutableIntStateOf(0) }
     val uiState by viewModel.uiState.collectAsState()
+    val isInitialized by NetworkClient.isInitialized.collectAsState()
 
     LaunchedEffect(selectedTab) {
-        if (selectedTab == 0) {
+        if (selectedTab == 0 && isInitialized) {
             viewModel.refreshData()
         }
     }
@@ -304,11 +308,24 @@ private fun MainContent(
     val mempoolInfo by viewModel.mempoolInfo.observeAsState()
 
     when (uiState) {
-        is Result.Error -> ErrorDisplay(
-            message = uiState.message,
-            onRetry = viewModel::refreshData,
-            modifier = modifier
-        )
+        is Result.Error -> {
+            if (!viewModel.hasInitialData) {
+                // Show loading cards if we haven't received any data yet
+                MainContentDisplay(
+                    blockHeight = null,
+                    feeRates = null,
+                    mempoolInfo = null,
+                    modifier = modifier
+                )
+            } else {
+                // Show error only if we had data before
+                ErrorDisplay(
+                    message = uiState.message,
+                    onRetry = viewModel::refreshData,
+                    modifier = modifier
+                )
+            }
+        }
         else -> MainContentDisplay(
             blockHeight = blockHeight,
             feeRates = feeRates,
@@ -378,11 +395,10 @@ private fun MainContentDisplay(
             content = if (feeRates != null) { { FeeRatesContent(feeRates) } } else null,
             icon = Icons.Default.CurrencyBitcoin,
             tooltip = "This section shows a rough average of recommended fees with varying confirmation times." +
-                    "\n\n*Note: At times, a flood of transactions may enter the mempool and drastically push up fee rates. " +
+                    "\n\n*Note: At times a flood of transactions may enter the mempool and drastically push up fee rates. " +
                     "These floods are often temporary with only a few vMB worth of transactions that clear relatively quickly. " +
                     "In this scenario be sure to check the 'Fee Distribution' table to see how big the flood is and how quickly it will clear " +
                     "to ensure you do not overpay fees.",
-            isLoading = feeRates == null
         )
 
         DataCard(
@@ -395,7 +411,6 @@ private fun MainContentDisplay(
                     "\n-Yellow might be confirmed in the next block." +
                     "\n-Red will not be confirmed in the next block." +
                     "\n\n*Note: Each Bitcoin block confirms about 1.5vMB worth of transactions.",
-            isLoading = mempoolInfo == null
         )
     }
 }
@@ -435,7 +450,7 @@ private fun DataCard(
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
                     text = title,
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.headlineMedium,
                     color = AppColors.Orange
                 )
                 if (tooltip != null) {
@@ -511,16 +526,12 @@ private fun TooltipButton(tooltip: String) {
 }
 
 @Composable
-private fun FeeRatesContent(feeRates: FeeRates?) {
-    if (feeRates != null) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            FeeRateRow("Next Block", feeRates.fastestFee)
-            FeeRateRow("In 2 Blocks", feeRates.halfHourFee)
-            FeeRateRow("In 4 Blocks", feeRates.hourFee)
-            FeeRateRow("In 1 Day", feeRates.economyFee)
-        }
-    } else {
-        Text("Loading...", style = MaterialTheme.typography.bodyLarge)
+private fun FeeRatesContent(feeRates: FeeRates) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        FeeRateRow("Next Block", feeRates.fastestFee)
+        FeeRateRow("In 3 Blocks", feeRates.halfHourFee)
+        FeeRateRow("In 6 Blocks", feeRates.hourFee)
+        FeeRateRow("In 1 Day", feeRates.economyFee)
     }
 }
 
@@ -1065,8 +1076,8 @@ private fun FeeRatesNotificationSection(
                         OutlinedTextField(
                             value = when (selectedFeeRateType) {
                                 FeeRateType.NEXT_BLOCK -> "Next Block"
-                                FeeRateType.TWO_BLOCKS -> "2 Blocks"
-                                FeeRateType.FOUR_BLOCKS -> "4 Blocks"
+                                FeeRateType.TWO_BLOCKS -> "3 Blocks"
+                                FeeRateType.FOUR_BLOCKS -> "6 Blocks"
                                 FeeRateType.DAY_BLOCKS -> "1 Day"
                             },
                             label = { Text("Fee Rate", color = AppColors.DataGray) },
@@ -1093,14 +1104,14 @@ private fun FeeRatesNotificationSection(
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("2 Blocks") },
+                                text = { Text("3 Blocks") },
                                 onClick = {
                                     onFeeRateTypeChange(FeeRateType.TWO_BLOCKS)
                                     expanded = false
                                 }
                             )
                             DropdownMenuItem(
-                                text = { Text("4 Blocks") },
+                                text = { Text("6 Blocks") },
                                 onClick = {
                                     onFeeRateTypeChange(FeeRateType.FOUR_BLOCKS)
                                     expanded = false
@@ -1185,11 +1196,20 @@ private fun TransactionConfirmationSection(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Text(
-                    text = "Confirmation",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = AppColors.Orange
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Confirmation",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = AppColors.Orange
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    TooltipButton(
+                        tooltip = "Caution: This feature has privacy implications.\nIf you're concerned about privacy, be sure to use the " +
+                                "'Enable Tor' option in settings or connect to your own custom mempool server.",
+                    )
+                }
                 Switch(
                     checked = enabled,
                     onCheckedChange = onEnabledChange
@@ -1279,14 +1299,46 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
             customUrl.trim()
         }
 
-        if (selectedOption == 1 && !isValidUrl(newUrl)) {
-            showUrlError = true
-            return
+        if (selectedOption == 1) {
+            if (!isValidUrl(newUrl)) {
+                showUrlError = true
+                return
+            }
+            // Disable Tor if saving a non-onion address
+            if (!newUrl.contains(".onion") && torManager.isTorEnabled()) {
+                torManager.stopTor(context)
+                torEnabled = false
+            }
         }
 
         showUrlError = false
         settingsRepository.saveApiUrl(newUrl)
         showRestartDialog = true
+    }
+
+    // Add this function to handle server testing
+    val scope = rememberCoroutineScope()
+    var isTestingConnection by remember { mutableStateOf(false) }
+    var testResult by remember { mutableStateOf<Boolean?>(null) }
+
+    suspend fun testServerConnection(url: String): Boolean {
+        return try {
+            if (url.contains(".onion")) {
+                // Check Tor status first
+                if (torManager.torStatus.value != TorStatus.CONNECTED) {
+                    return false
+                }
+                val client = NetworkClient.createTestClient(url, useTor = true)
+                val response = client.getBlockHeight()
+                response.isSuccessful
+            } else {
+                val client = NetworkClient.createTestClient(url, useTor = false)
+                val response = client.getBlockHeight()
+                response.isSuccessful
+            }
+        } catch (_: Exception) {
+            false
+        }
     }
 
     Column(
@@ -1303,7 +1355,6 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
         )
 
         Card(
-            modifier = Modifier.fillMaxWidth(),
             colors = CardDefaults.cardColors(
                 containerColor = AppColors.DarkerNavy
             )
@@ -1311,15 +1362,15 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                    .padding(16.dp)
             ) {
                 Text(
-                    text = "Mempool API",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = AppColors.DataGray
+                    text = "Mempool Server",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = AppColors.Orange
                 )
 
+                // Server selection options
                 Column {
                     RadioOption(
                         text = "Default (mempool.space)",
@@ -1327,7 +1378,6 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                         onClick = {
                             selectedOption = 0
                             customUrl = ""
-                            // Disable Tor when selecting default mempool.space
                             if (torManager.isTorEnabled()) {
                                 torManager.stopTor(context)
                                 torEnabled = false
@@ -1336,7 +1386,7 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                     )
 
                     RadioOption(
-                        text = "Custom API",
+                        text = "Custom Server",
                         selected = selectedOption == 1,
                         onClick = { selectedOption = 1 }
                     )
@@ -1347,8 +1397,7 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                             onValueChange = {
                                 customUrl = it
                                 showUrlError = false
-
-                                // Auto-toggle Tor when onion address is detected
+                                testResult = null
                                 if (it.contains(".onion")) {
                                     if (!torEnabled) {
                                         torEnabled = true
@@ -1356,7 +1405,7 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                                     }
                                 }
                             },
-                            label = { Text(if (torEnabled) "Onion Address" else "API URL", color = AppColors.DataGray) },
+                            label = { Text(if (torEnabled) "Onion Address" else "Address", color = AppColors.DataGray) },
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(top = 8.dp),
@@ -1376,70 +1425,136 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                             )
                         }
 
-                        Row(
+                        // Test Server button and result
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(top = 8.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
+                                .padding(top = 8.dp)
                         ) {
-                            Column {
-                                Text(
-                                    text = "Use Tor",
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = AppColors.DataGray
-                                )
-                                if (torEnabled) {
-                                    Text(
-                                        text = "Status: ${torStatus.name}",
-                                        color = when (torStatus) {
-                                            TorStatus.CONNECTED -> Color.Green
-                                            TorStatus.CONNECTING -> Color.Yellow
-                                            TorStatus.DISCONNECTED -> Color.Red
-                                            TorStatus.ERROR -> Color.Red
-                                        },
-                                        style = MaterialTheme.typography.bodySmall,
-                                        modifier = Modifier.padding(top = 4.dp)
-                                    )
-                                }
-                            }
-                            Switch(
-                                checked = torEnabled,
-                                onCheckedChange = { enabled ->
-                                    if (enabled && customUrl.isNotEmpty() && (!customUrl.startsWith("http://") && !customUrl.startsWith("https://"))) {
-                                        showUrlError = true
-                                        return@Switch
-                                    }
-                                    torEnabled = enabled
-                                    if (enabled) {
-                                        torManager.startTor(context)
-                                        if (customUrl.isEmpty()) {
-                                            customUrl = "http://mempoolhqx4isw62xs7abwphsq7ldayuidyx2v2oethdhhj6mlo2r6ad.onion/"
-                                        }
-                                    } else {
-                                        torManager.stopTor(context)
+                            Button(
+                                onClick = {
+                                    isTestingConnection = true
+                                    scope.launch {
+                                        testResult = testServerConnection(customUrl)
+                                        isTestingConnection = false
                                     }
                                 },
-                                enabled = torStatus != TorStatus.CONNECTING,
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = AppColors.Orange,
-                                    checkedTrackColor = AppColors.Orange.copy(alpha = 0.5f),
-                                    disabledCheckedThumbColor = AppColors.Orange.copy(alpha = 0.5f),
-                                    disabledCheckedTrackColor = AppColors.Orange.copy(alpha = 0.3f)
+                                enabled = !isTestingConnection && customUrl.isNotEmpty(),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = AppColors.Orange,
+                                    disabledContainerColor = AppColors.Orange.copy(alpha = 0.5f)
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                if (isTestingConnection) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(16.dp),
+                                        color = Color.White,
+                                        strokeWidth = 2.dp
+                                    )
+                                } else {
+                                    Text("Test Server")
+                                }
+                            }
+
+                            if (testResult != null && !isTestingConnection && customUrl.isNotEmpty()) {
+                                Text(
+                                    text = if (testResult == true) "Connection successful" else "Connection failed",
+                                    color = if (testResult == true) Color.Green else Color.Red,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    modifier = Modifier
+                                        .padding(top = 4.dp)
+                                        .fillMaxWidth(),
+                                    textAlign = TextAlign.Center
                                 )
-                            )
+                            }
                         }
+                    }
+                    // Tor controls follow here...
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 24.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "Enable Tor",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = AppColors.DataGray
+                            )
+                            Text(
+                                text = "Status: ${torStatus.name}",
+                                color = when (torStatus) {
+                                    TorStatus.CONNECTED -> Color.Green
+                                    TorStatus.CONNECTING -> Color.Yellow
+                                    TorStatus.DISCONNECTED -> Color.Red
+                                    TorStatus.ERROR -> Color.Red
+                                },
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(top = 4.dp)
+                            )
+                            if (torEnabled) {
+                                Text(
+                                    text = "Tor defaults to mempool.space's onion address.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = AppColors.DataGray.copy(alpha = 0.7f),
+                                    modifier = Modifier.padding(top = 2.dp)
+                                )
+                            }
+                        }
+                        Switch(
+                            checked = torEnabled,
+                            onCheckedChange = { enabled ->
+                                if (enabled && customUrl.isNotEmpty() && (!customUrl.startsWith("http://") && !customUrl.startsWith("https://"))) {
+                                    showUrlError = true
+                                    return@Switch
+                                }
+                                torEnabled = enabled
+                                if (enabled) {
+                                    selectedOption = 1
+                                    torManager.startTor(context)
+                                    if (customUrl.isEmpty()) {
+                                        customUrl = "http://mempoolhqx4isw62xs7abwphsq7ldayuidyx2v2oethdhhj6mlo2r6ad.onion/"
+                                    }
+                                } else {
+                                    torManager.stopTor(context)
+                                    customUrl = ""
+                                }
+                            },
+                            enabled = torStatus != TorStatus.CONNECTING,
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = AppColors.Orange,
+                                uncheckedThumbColor = AppColors.DataGray,
+                                uncheckedTrackColor = AppColors.DarkerNavy,
+                                disabledCheckedThumbColor = AppColors.Orange.copy(alpha = 0.5f),
+                                disabledCheckedTrackColor = AppColors.Orange.copy(alpha = 0.3f),
+                                disabledUncheckedThumbColor = AppColors.DataGray,
+                                disabledUncheckedTrackColor = AppColors.DataGray
+                            )
+                        )
                     }
                 }
 
-                Button(
-                    onClick = { handleSave() },
-                    modifier = Modifier.align(Alignment.End),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = AppColors.Orange
-                    )
+                // Add the Test Server button next to the Save button
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 8.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text("Save")
+                    Button(
+                        onClick = { handleSave() },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = AppColors.Orange
+                        ),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text("Save")
+                    }
                 }
             }
         }
@@ -1484,7 +1599,7 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                 Text("Restart Required")
             },
             text = {
-                Text("Please restart the app to apply the new API settings.")
+                Text("Please restart the app to save your settings.")
             },
             confirmButton = {
                 TextButton(
@@ -1518,7 +1633,7 @@ private fun RadioOption(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .height(48.dp)  // Fixed height for consistent alignment
+            .height(40.dp)
             .selectable(selected = selected, onClick = onClick),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -1528,7 +1643,7 @@ private fun RadioOption(
             colors = RadioButtonDefaults.colors(
                 selectedColor = AppColors.Orange
             ),
-            modifier = Modifier.padding(start = 16.dp)  // Consistent left padding
+            modifier = Modifier.padding(start = 16.dp)
         )
         Text(
             text = text,
