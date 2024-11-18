@@ -34,6 +34,42 @@
             android:name=".service.NotificationService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <receiver android:name=".widget.FeeRatesWidget"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/fee_rates_widget_info" />
+        </receiver>
+        <receiver android:name=".widget.BlockHeightWidget"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/block_height_widget_info" />
+        </receiver>
+        <receiver android:name=".widget.MempoolSizeWidget"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/mempool_size_widget_info" />
+        </receiver>
+        <receiver android:name=".widget.CombinedStatsWidget"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/combined_stats_widget_info" />
+        </receiver>
     </application>
 
 </manifest>
