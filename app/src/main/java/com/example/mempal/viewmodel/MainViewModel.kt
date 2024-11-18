@@ -30,27 +30,27 @@ class MainViewModel : ViewModel() {
     var hasInitialData = false
         private set
 
-    fun refreshData() {
+    init {
         viewModelScope.launch {
-            try {
-                _uiState.value = Result.Loading
-
-                val responses = kotlin.runCatching {
-                    Triple(
-                        NetworkClient.mempoolApi.getBlockHeight(),
-                        NetworkClient.mempoolApi.getFeeRates(),
-                        NetworkClient.mempoolApi.getMempoolInfo()
-                    )
+            NetworkClient.isInitialized.collect { initialized ->
+                if (initialized) {
+                    refreshData()
                 }
+            }
+        }
+    }
 
-                responses.fold(
-                    onSuccess = { (blockHeight, feeRates, mempoolInfo) ->
-                        processResponses(blockHeight, feeRates, mempoolInfo)
-                    },
-                    onFailure = { e ->
-                        handleError(e)
-                    }
-                )
+    fun refreshData() {
+        if (!NetworkClient.isInitialized.value) return
+
+        viewModelScope.launch {
+            _uiState.value = Result.Loading
+            try {
+                val blockHeightResponse = NetworkClient.mempoolApi.getBlockHeight()
+                val feeRatesResponse = NetworkClient.mempoolApi.getFeeRates()
+                val mempoolInfoResponse = NetworkClient.mempoolApi.getMempoolInfo()
+
+                processResponses(blockHeightResponse, feeRatesResponse, mempoolInfoResponse)
             } catch (e: Exception) {
                 handleError(e)
             }
@@ -81,4 +81,4 @@ class MainViewModel : ViewModel() {
             }
         )
     }
-} 
+}
