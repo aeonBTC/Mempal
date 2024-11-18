@@ -75,7 +75,7 @@ class TorManager private constructor() {
             context.startService(intent)
 
             scope.launch {
-                delay(2000) // 2 second delay
+                delay(5100)
                 _torStatus.value = TorStatus.CONNECTED
                 _proxyReady.value = true
                 prefs.edit().putBoolean(KEY_TOR_ENABLED, true).apply()
