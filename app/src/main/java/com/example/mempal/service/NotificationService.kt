@@ -75,10 +75,17 @@ class NotificationService : Service() {
             val mempoolInfo = api.getMempoolInfo()
             if (mempoolInfo.isSuccessful) {
                 val currentSize = mempoolInfo.body()?.vsize?.toFloat()?.div(1_000_000f) ?: return
-                if (currentSize < threshold) {
+                val shouldNotify = if (settings.mempoolSizeAboveThreshold) {
+                    currentSize > threshold
+                } else {
+                    currentSize < threshold
+                }
+                
+                if (shouldNotify) {
+                    val condition = if (settings.mempoolSizeAboveThreshold) "risen above" else "fallen below"
                     showNotification(
                         "Mempool Size Alert",
-                        "Mempool size has fallen below $threshold vMB and is now ${String.format("%.2f", currentSize)} vMB"
+                        "Mempool size has $condition $threshold vMB and is now ${String.format("%.2f", currentSize)} vMB"
                     )
                     settingsRepository.updateSettings(
                         settings.copy(hasNotifiedForMempoolSize = true)
@@ -106,16 +113,24 @@ class NotificationService : Service() {
                     FeeRateType.FOUR_BLOCKS -> rates.hourFee
                     FeeRateType.DAY_BLOCKS -> rates.economyFee
                 }
-                if (currentRate < threshold) {
+                
+                val shouldNotify = if (settings.feeRateAboveThreshold) {
+                    currentRate > threshold
+                } else {
+                    currentRate < threshold
+                }
+
+                if (shouldNotify) {
                     val feeRateTypeString = when (feeRateType) {
                         FeeRateType.NEXT_BLOCK -> "Next Block"
-                        FeeRateType.TWO_BLOCKS -> "2 Block"
-                        FeeRateType.FOUR_BLOCKS -> "4 Block"
+                        FeeRateType.TWO_BLOCKS -> "3 Block"
+                        FeeRateType.FOUR_BLOCKS -> "6 Block"
                         FeeRateType.DAY_BLOCKS -> "1 Day"
                     }
+                    val condition = if (settings.feeRateAboveThreshold) "risen above" else "fallen below"
                     showNotification(
                         "Fee Rate Alert",
-                        "$feeRateTypeString fee rate has fallen below $threshold sat/vB and is currently at $currentRate sat/vB)"
+                        "$feeRateTypeString fee rate has $condition $threshold sat/vB and is currently at $currentRate sat/vB"
                     )
                     settingsRepository.updateSettings(
                         settings.copy(hasNotifiedForFeeRate = true)
