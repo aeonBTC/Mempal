@@ -805,6 +805,7 @@ private fun NotificationsScreen(
             frequency = settings.feeRatesCheckFrequency,
             selectedFeeRateType = settings.selectedFeeRateType,
             threshold = settings.feeRateThreshold,
+            isAboveThreshold = settings.feeRateAboveThreshold,
             onEnabledChange = { newSettings ->
                 settingsRepository.updateSettings(settings.copy(feeRatesNotificationsEnabled = newSettings))
             },
@@ -823,6 +824,14 @@ private fun NotificationsScreen(
                 settingsRepository.updateSettings(
                     settings.copy(
                         feeRateThreshold = newThreshold,
+                        hasNotifiedForFeeRate = false
+                    )
+                )
+            },
+            onAboveThresholdChange = { isAbove ->
+                settingsRepository.updateSettings(
+                    settings.copy(
+                        feeRateAboveThreshold = isAbove,
                         hasNotifiedForFeeRate = false
                     )
                 )
@@ -855,6 +864,7 @@ private fun NotificationsScreen(
             enabled = settings.mempoolSizeNotificationsEnabled,
             frequency = settings.mempoolCheckFrequency,
             threshold = settings.mempoolSizeThreshold,
+            aboveThreshold = settings.mempoolSizeAboveThreshold,
             onEnabledChange = { newSettings ->
                 settingsRepository.updateSettings(settings.copy(mempoolSizeNotificationsEnabled = newSettings))
             },
@@ -865,6 +875,14 @@ private fun NotificationsScreen(
                 settingsRepository.updateSettings(
                     settings.copy(
                         mempoolSizeThreshold = newThreshold,
+                        hasNotifiedForMempoolSize = false
+                    )
+                )
+            },
+            onAboveThresholdChange = { isAbove ->
+                settingsRepository.updateSettings(
+                    settings.copy(
+                        mempoolSizeAboveThreshold = isAbove,
                         hasNotifiedForMempoolSize = false
                     )
                 )
@@ -938,9 +956,11 @@ private fun MempoolSizeNotificationSection(
     enabled: Boolean,
     frequency: Int,
     threshold: Float,
+    aboveThreshold: Boolean,
     onEnabledChange: (Boolean) -> Unit,
     onFrequencyChange: (Int) -> Unit,
-    onThresholdChange: (Float) -> Unit
+    onThresholdChange: (Float) -> Unit,
+    onAboveThresholdChange: (Boolean) -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -970,7 +990,7 @@ private fun MempoolSizeNotificationSection(
                 )
             }
             Text(
-                text = "Get notified when mempool size falls below threshold.",
+                text = "Get notified when mempool size ${if (aboveThreshold) "rises above" else "falls below"} threshold.",
                 style = MaterialTheme.typography.titleMedium,
                 color = AppColors.DataGray
             )
@@ -978,6 +998,11 @@ private fun MempoolSizeNotificationSection(
                 Column(
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
+                    ThresholdToggle(
+                        isAboveThreshold = aboveThreshold,
+                        onToggleChange = onAboveThresholdChange
+                    )
+                    
                     OutlinedTextField(
                         value = threshold.toString(),
                         onValueChange = {
@@ -988,24 +1013,6 @@ private fun MempoolSizeNotificationSection(
                         label = { Text("Threshold (vMB)", color = AppColors.DataGray) },
                         modifier = Modifier.fillMaxWidth(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = AppColors.DataGray,
-                            focusedBorderColor = AppColors.Orange,
-                            unfocusedTextColor = AppColors.DataGray,
-                            focusedTextColor = AppColors.Orange
-                        )
-                    )
-                    OutlinedTextField(
-                        value = frequency.toString(),
-                        onValueChange = {
-                            it.toIntOrNull()?.let { value ->
-                                if (value > 0) onFrequencyChange(value)
-                            }
-                        },
-                        label = { Text("Check Frequency (minutes)", color = AppColors.DataGray) },
-                        modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
                             unfocusedBorderColor = AppColors.DataGray,
@@ -1026,10 +1033,12 @@ private fun FeeRatesNotificationSection(
     frequency: Int,
     selectedFeeRateType: FeeRateType,
     threshold: Int,
+    isAboveThreshold: Boolean,
     onEnabledChange: (Boolean) -> Unit,
     onFrequencyChange: (Int) -> Unit,
     onFeeRateTypeChange: (FeeRateType) -> Unit,
-    onThresholdChange: (Int) -> Unit
+    onThresholdChange: (Int) -> Unit,
+    onAboveThresholdChange: (Boolean) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
 
@@ -1061,7 +1070,7 @@ private fun FeeRatesNotificationSection(
                 )
             }
             Text(
-                text = "Get notified when fee rates fall below threshold.",
+                text = "Get notified when fee rates ${if (isAboveThreshold) "rise above" else "fall below"} threshold.",
                 style = MaterialTheme.typography.titleMedium,
                 color = AppColors.DataGray
             )
@@ -1069,6 +1078,10 @@ private fun FeeRatesNotificationSection(
                 Column(
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
+                    ThresholdToggle(
+                        isAboveThreshold = isAboveThreshold,
+                        onToggleChange = onAboveThresholdChange
+                    )
                     ExposedDropdownMenuBox(
                         expanded = expanded,
                         onExpandedChange = { expanded = !expanded }
@@ -1651,5 +1664,52 @@ private fun RadioOption(
             color = AppColors.DataGray,
             modifier = Modifier.padding(start = 8.dp)
         )
+    }
+}
+
+@Composable
+private fun ThresholdToggle(
+    isAboveThreshold: Boolean,
+    onToggleChange: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        modifier = modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = "Notify when",
+            style = MaterialTheme.typography.titleMedium,
+            color = AppColors.DataGray
+        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "Below",
+                color = if (!isAboveThreshold) AppColors.Orange else AppColors.DataGray
+            )
+            Switch(
+                checked = isAboveThreshold,
+                onCheckedChange = onToggleChange,
+                modifier = Modifier
+                    .width(36.dp)
+                    .height(20.dp),
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.Gray,
+                    checkedTrackColor = Color.DarkGray.copy(alpha = 0.5f),
+                    uncheckedThumbColor = Color.Gray,
+                    uncheckedTrackColor = Color.DarkGray.copy(alpha = 0.5f),
+                    checkedBorderColor = Color.DarkGray,
+                    uncheckedBorderColor = Color.DarkGray
+                )
+            )
+            Text(
+                text = "Above",
+                color = if (isAboveThreshold) AppColors.Orange else AppColors.DataGray
+            )
+        }
     }
 }
