@@ -862,10 +862,14 @@ private fun NotificationsScreen(
         // Mempool Size section (moved to bottom)
         MempoolSizeNotificationSection(
             enabled = settings.mempoolSizeNotificationsEnabled,
+            frequency = settings.mempoolCheckFrequency,
             threshold = settings.mempoolSizeThreshold,
             aboveThreshold = settings.mempoolSizeAboveThreshold,
             onEnabledChange = { newSettings ->
                 settingsRepository.updateSettings(settings.copy(mempoolSizeNotificationsEnabled = newSettings))
+            },
+            onFrequencyChange = { newSettings ->
+                settingsRepository.updateSettings(settings.copy(mempoolCheckFrequency = newSettings))
             },
             onThresholdChange = { newThreshold ->
                 settingsRepository.updateSettings(
@@ -950,9 +954,11 @@ private fun NotificationSection(
 @Composable
 private fun MempoolSizeNotificationSection(
     enabled: Boolean,
+    frequency: Int,
     threshold: Float,
     aboveThreshold: Boolean,
     onEnabledChange: (Boolean) -> Unit,
+    onFrequencyChange: (Int) -> Unit,
     onThresholdChange: (Float) -> Unit,
     onAboveThresholdChange: (Boolean) -> Unit
 ) {
@@ -996,7 +1002,6 @@ private fun MempoolSizeNotificationSection(
                         isAboveThreshold = aboveThreshold,
                         onToggleChange = onAboveThresholdChange
                     )
-
                     OutlinedTextField(
                         value = threshold.toString(),
                         onValueChange = {
@@ -1007,6 +1012,24 @@ private fun MempoolSizeNotificationSection(
                         label = { Text("Threshold (vMB)", color = AppColors.DataGray) },
                         modifier = Modifier.fillMaxWidth(),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedBorderColor = AppColors.DataGray,
+                            focusedBorderColor = AppColors.Orange,
+                            unfocusedTextColor = AppColors.DataGray,
+                            focusedTextColor = AppColors.Orange
+                        )
+                    )
+                    OutlinedTextField(
+                        value = frequency.toString(),
+                        onValueChange = {
+                            it.toIntOrNull()?.let { value ->
+                                if (value > 0) onFrequencyChange(value)
+                            }
+                        },
+                        label = { Text("Check Frequency (minutes)", color = AppColors.DataGray) },
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
                             unfocusedBorderColor = AppColors.DataGray,
@@ -1076,6 +1099,26 @@ private fun FeeRatesNotificationSection(
                         isAboveThreshold = isAboveThreshold,
                         onToggleChange = onAboveThresholdChange
                     )
+
+                    OutlinedTextField(
+                        value = threshold.toString(),
+                        onValueChange = {
+                            it.toIntOrNull()?.let { value ->
+                                if (value > 0) onThresholdChange(value)
+                            }
+                        },
+                        label = { Text("Threshold (sat/vB)", color = AppColors.DataGray) },
+                        modifier = Modifier.fillMaxWidth(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            unfocusedBorderColor = AppColors.DataGray,
+                            focusedBorderColor = AppColors.Orange,
+                            unfocusedTextColor = AppColors.DataGray,
+                            focusedTextColor = AppColors.Orange
+                        )
+                    )
+
                     ExposedDropdownMenuBox(
                         expanded = expanded,
                         onExpandedChange = { expanded = !expanded }
@@ -1090,8 +1133,10 @@ private fun FeeRatesNotificationSection(
                             label = { Text("Fee Rate", color = AppColors.DataGray) },
                             onValueChange = {},
                             readOnly = true,
-                            modifier = Modifier.menuAnchor().fillMaxWidth(),
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .menuAnchor(),
                             colors = OutlinedTextFieldDefaults.colors(
                                 unfocusedBorderColor = AppColors.DataGray,
                                 focusedBorderColor = AppColors.Orange,
@@ -1133,25 +1178,6 @@ private fun FeeRatesNotificationSection(
                             )
                         }
                     }
-
-                    OutlinedTextField(
-                        value = threshold.toString(),
-                        onValueChange = {
-                            it.toIntOrNull()?.let { value ->
-                                if (value > 0) onThresholdChange(value)
-                            }
-                        },
-                        label = { Text("Threshold (sat/vB)", color = AppColors.DataGray) },
-                        modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = AppColors.DataGray,
-                            focusedBorderColor = AppColors.Orange,
-                            unfocusedTextColor = AppColors.DataGray,
-                            focusedTextColor = AppColors.Orange
-                        )
-                    )
 
                     OutlinedTextField(
                         value = frequency.toString(),
