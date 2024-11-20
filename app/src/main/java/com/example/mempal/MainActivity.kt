@@ -862,14 +862,10 @@ private fun NotificationsScreen(
         // Mempool Size section (moved to bottom)
         MempoolSizeNotificationSection(
             enabled = settings.mempoolSizeNotificationsEnabled,
-            frequency = settings.mempoolCheckFrequency,
             threshold = settings.mempoolSizeThreshold,
             aboveThreshold = settings.mempoolSizeAboveThreshold,
             onEnabledChange = { newSettings ->
                 settingsRepository.updateSettings(settings.copy(mempoolSizeNotificationsEnabled = newSettings))
-            },
-            onFrequencyChange = { newSettings ->
-                settingsRepository.updateSettings(settings.copy(mempoolCheckFrequency = newSettings))
             },
             onThresholdChange = { newThreshold ->
                 settingsRepository.updateSettings(
@@ -954,11 +950,9 @@ private fun NotificationSection(
 @Composable
 private fun MempoolSizeNotificationSection(
     enabled: Boolean,
-    frequency: Int,
     threshold: Float,
     aboveThreshold: Boolean,
     onEnabledChange: (Boolean) -> Unit,
-    onFrequencyChange: (Int) -> Unit,
     onThresholdChange: (Float) -> Unit,
     onAboveThresholdChange: (Boolean) -> Unit
 ) {
@@ -1002,7 +996,7 @@ private fun MempoolSizeNotificationSection(
                         isAboveThreshold = aboveThreshold,
                         onToggleChange = onAboveThresholdChange
                     )
-                    
+
                     OutlinedTextField(
                         value = threshold.toString(),
                         onValueChange = {
@@ -1694,16 +1688,13 @@ private fun ThresholdToggle(
             Switch(
                 checked = isAboveThreshold,
                 onCheckedChange = onToggleChange,
-                modifier = Modifier
-                    .width(36.dp)
-                    .height(20.dp),
                 colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.Gray,
-                    checkedTrackColor = Color.DarkGray.copy(alpha = 0.5f),
-                    uncheckedThumbColor = Color.Gray,
-                    uncheckedTrackColor = Color.DarkGray.copy(alpha = 0.5f),
-                    checkedBorderColor = Color.DarkGray,
-                    uncheckedBorderColor = Color.DarkGray
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = AppColors.DarkerNavy,
+                    uncheckedThumbColor = Color.White,
+                    uncheckedTrackColor = AppColors.DarkerNavy,
+                    checkedBorderColor = Color.Gray,
+                    uncheckedBorderColor = Color.Gray
                 )
             )
             Text(
