@@ -80,7 +80,7 @@ class NotificationService : Service() {
                 } else {
                     currentSize < threshold
                 }
-                
+
                 if (shouldNotify) {
                     val condition = if (settings.mempoolSizeAboveThreshold) "risen above" else "fallen below"
                     showNotification(
@@ -113,7 +113,7 @@ class NotificationService : Service() {
                     FeeRateType.FOUR_BLOCKS -> rates.hourFee
                     FeeRateType.DAY_BLOCKS -> rates.economyFee
                 }
-                
+
                 val shouldNotify = if (settings.feeRateAboveThreshold) {
                     currentRate > threshold
                 } else {
