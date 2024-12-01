@@ -9,4 +9,14 @@
     <string name="fee_rates_description">Get notified when fee rates fall below threshold.</string>
     <string name="tx_confirmation_title">Transaction Confirmation</string>
     <string name="tx_confirmation_description">Get notified when your transaction is confirmed.</string>
+    
+    <!-- Widget strings -->
+    <string name="block_height_label">Block Height</string>
+    <string name="mempool_size_label">Mempool Size</string>
+    <string name="one_block_label">1 Block</string>
+    <string name="three_blocks_label">3 Blocks</string>
+    <string name="six_blocks_label">6 Blocks</string>
+    <string name="sat_vb_unit">sat/vB</string>
+    <string name="block_height_icon_desc">Block height icon</string>
+    <string name="mempool_size_icon_desc">Mempool size icon</string>
 </resources>

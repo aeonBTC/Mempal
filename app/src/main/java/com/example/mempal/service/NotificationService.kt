@@ -14,52 +14,91 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.first
 
 class NotificationService : Service() {
-    private val serviceScope = CoroutineScope(Dispatchers.IO + Job())
+    companion object {
+        const val NOTIFICATION_ID = 1
+    }
+
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private lateinit var settingsRepository: SettingsRepository
     private val api = NetworkClient.mempoolApi
     private val channelId = "mempal_notifications"
     private var lastBlockHeight: Int? = null
+    private val monitoringJobs = mutableMapOf<String, Job>()
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
         settingsRepository = SettingsRepository.getInstance(applicationContext)
+        NetworkClient.initialize(applicationContext)
         createNotificationChannel()
-        startForeground(1, createForegroundNotification())
+
+        // Update settings to show service is enabled when starting
+        serviceScope.launch {
+            settingsRepository.updateSettings(
+                settingsRepository.settings.value.copy(isServiceEnabled = true)
+            )
+        }
+
+        startForeground(NOTIFICATION_ID, createForegroundNotification())
         startMonitoring()
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Return START_STICKY to ensure service restarts if killed
+        return START_STICKY
     }
 
     private fun startMonitoring() {
         serviceScope.launch {
-            while (isActive) {
-                val settings = settingsRepository.settings.first()
+            settingsRepository.settings.collect { settings ->
+                monitoringJobs.values.forEach { it.cancel() }
+                monitoringJobs.clear()
+
+                if (settings.newBlockNotificationEnabled) {
+                    monitoringJobs["newBlock"] = launch {
+                        while (isActive) {
+                            checkNewBlocks()
+                            delay(settings.newBlockCheckFrequency * 60 * 1000L)
+                        }
+                    }
+                }
+
+                if (settings.specificBlockNotificationEnabled) {
+                    monitoringJobs["specificBlock"] = launch {
+                        while (isActive) {
+                            checkNewBlocks()
+                            delay(settings.specificBlockCheckFrequency * 60 * 1000L)
+                        }
+                    }
+                }
 
                 if (settings.mempoolSizeNotificationsEnabled) {
-                    checkMempoolSize(settings.mempoolSizeThreshold)
+                    monitoringJobs["mempoolSize"] = launch {
+                        while (isActive) {
+                            checkMempoolSize(settings.mempoolSizeThreshold)
+                            delay(settings.mempoolCheckFrequency * 60 * 1000L)
+                        }
+                    }
                 }
 
                 if (settings.feeRatesNotificationsEnabled) {
-                    checkFeeRates(settings.selectedFeeRateType, settings.feeRateThreshold)
-                }
-
-                if (settings.blockNotificationsEnabled) {
-                    checkNewBlocks()
+                    monitoringJobs["feeRates"] = launch {
+                        while (isActive) {
+                            checkFeeRates(settings.selectedFeeRateType, settings.feeRateThreshold)
+                            delay(settings.feeRatesCheckFrequency * 60 * 1000L)
+                        }
+                    }
                 }
 
                 if (settings.txConfirmationEnabled && settings.transactionId.isNotEmpty()) {
-                    checkTransactionConfirmation(settings.transactionId)
+                    monitoringJobs["txConfirmation"] = launch {
+                        while (isActive) {
+                            checkTransactionConfirmation(settings.transactionId)
+                            delay(settings.txConfirmationFrequency * 60 * 1000L)
+                        }
+                    }
                 }
-
-                val shortestDelay = minOf(
-                    if (settings.mempoolSizeNotificationsEnabled) settings.mempoolCheckFrequency else Int.MAX_VALUE,
-                    if (settings.feeRatesNotificationsEnabled) settings.feeRatesCheckFrequency else Int.MAX_VALUE,
-                    if (settings.blockNotificationsEnabled) settings.blockCheckFrequency else Int.MAX_VALUE,
-                    if (settings.txConfirmationEnabled) settings.txConfirmationFrequency else Int.MAX_VALUE,
-                    1
-                )
-
-                delay(shortestDelay * 60 * 1000L)
             }
         }
     }
@@ -144,16 +183,45 @@ class NotificationService : Service() {
 
     private suspend fun checkNewBlocks() {
         try {
+            val settings = settingsRepository.settings.first()
+
+            // Skip if neither notification is enabled
+            if (!settings.newBlockNotificationEnabled && !settings.specificBlockNotificationEnabled) {
+                return
+            }
+
             val blockHeight = api.getBlockHeight()
             if (blockHeight.isSuccessful) {
                 val currentHeight = blockHeight.body()
-                if (lastBlockHeight != null && currentHeight != null && currentHeight > lastBlockHeight!!) {
-                    showNotification(
-                        "New Block Mined",
-                        "Block #$currentHeight has been mined"
-                    )
+                if (currentHeight != null) {
+                    // Check for new block notification
+                    if (settings.newBlockNotificationEnabled &&
+                        lastBlockHeight != null &&
+                        currentHeight > lastBlockHeight!!
+                    ) {
+                        showNotification(
+                            "New Block Mined",
+                            "Block #$currentHeight has been mined"
+                        )
+                    }
+
+                    // Check for specific block height notification
+                    if (settings.specificBlockNotificationEnabled &&
+                        !settings.hasNotifiedForTargetBlock &&
+                        settings.targetBlockHeight != null &&
+                        currentHeight >= settings.targetBlockHeight
+                    ) {
+                        showNotification(
+                            "Target Block Height Reached",
+                            "Block height ${settings.targetBlockHeight} has been reached!"
+                        )
+                        settingsRepository.updateSettings(
+                            settings.copy(hasNotifiedForTargetBlock = true)
+                        )
+                    }
+
+                    lastBlockHeight = currentHeight
                 }
-                lastBlockHeight = currentHeight
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -223,9 +291,29 @@ class NotificationService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        monitoringJobs.values.forEach { it.cancel() }
+        monitoringJobs.clear()
         serviceScope.cancel()
-        settingsRepository.settings.value.let { currentSettings ->
-            settingsRepository.updateSettings(currentSettings.copy(isServiceEnabled = false))
+        NetworkClient.cleanup()
+
+        // Only update settings if service is actually being destroyed (not restarted)
+        if (!isServiceRestarting()) {
+            settingsRepository.settings.value.let { currentSettings ->
+                settingsRepository.updateSettings(currentSettings.copy(isServiceEnabled = false))
+            }
+        }
+        lastBlockHeight = null
+    }
+
+    private fun isServiceRestarting(): Boolean {
+        // Check if service is being restarted by system
+        return try {
+            val manager = getSystemService(ACTIVITY_SERVICE) as ActivityManager
+            manager.runningAppProcesses?.any {
+                it.processName == packageName && it.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_SERVICE
+            } == true
+        } catch (_: Exception) {
+            false
         }
     }
 }

@@ -1,10 +1,8 @@
 package com.example.mempal
 
 import android.Manifest
-import android.annotation.SuppressLint
 import android.app.Activity
 import android.app.NotificationManager
-import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
@@ -47,6 +45,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.livedata.observeAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -61,8 +60,10 @@ import androidx.compose.ui.window.Popup
 import androidx.core.content.ContextCompat
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.lifecycleScope
 import com.example.mempal.api.FeeRates
 import com.example.mempal.api.MempoolInfo
+import com.example.mempal.api.NetworkClient
 import com.example.mempal.api.Result
 import com.example.mempal.model.FeeRateType
 import com.example.mempal.model.NotificationSettings
@@ -73,14 +74,33 @@ import com.example.mempal.tor.TorStatus
 import com.example.mempal.ui.theme.AppColors
 import com.example.mempal.ui.theme.MempalTheme
 import com.example.mempal.viewmodel.MainViewModel
-import java.util.Locale
-import com.example.mempal.api.NetworkClient
+import com.example.mempal.widget.WidgetUpdater
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.Locale
+import kotlin.math.ceil
 
 
 data class NotificationSectionConfig(
     val title: String,
     val description: String,
+    val enabled: Boolean,
+    val frequency: Int,
+    val onEnabledChange: (Boolean) -> Unit,
+    val onFrequencyChange: (Int) -> Unit
+)
+
+data class SpecificBlockConfig(
+    val enabled: Boolean,
+    val frequency: Int,
+    val targetHeight: Int?,
+    val onEnabledChange: (Boolean) -> Unit,
+    val onFrequencyChange: (Int) -> Unit,
+    val onTargetHeightChange: (Int?) -> Unit
+)
+
+data class NewBlockConfig(
     val enabled: Boolean,
     val frequency: Int,
     val onEnabledChange: (Boolean) -> Unit,
@@ -111,6 +131,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    // Add helper function to check if service is running
+    private fun isServiceRunning(): Boolean {
+        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+        return notificationManager.activeNotifications.any { it.id == NotificationService.NOTIFICATION_ID }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         val splashScreen = installSplashScreen()
         splashScreen.setKeepOnScreenCondition {
@@ -119,7 +145,33 @@ class MainActivity : ComponentActivity() {
 
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        viewModel.refreshData()
+
+        // Initialize NetworkClient and SettingsRepository
+        NetworkClient.initialize(applicationContext)
+        settingsRepository = SettingsRepository.getInstance(applicationContext)
+
+        // Fix: Move the NetworkClient initialization check into a proper coroutine scope
+        lifecycleScope.launch {
+            NetworkClient.isInitialized.collect { isInitialized ->
+                if (isInitialized) {
+                    viewModel.refreshData()
+                }
+            }
+        }
+
+        // Restore notification service state
+        lifecycleScope.launch {
+            settingsRepository.settings.collect { settings ->
+                if (settings.isServiceEnabled) {
+                    val serviceIntent = Intent(this@MainActivity, NotificationService::class.java)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        startForegroundService(serviceIntent)
+                    } else {
+                        startService(serviceIntent)
+                    }
+                }
+            }
+        }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(
@@ -131,11 +183,54 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        settingsRepository = SettingsRepository(this)
+        // Check service state and update settings immediately
+        updateServiceState()
 
         setContent {
             MempalTheme {
                 MainScreen(viewModel)
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Update service state on resume
+        updateServiceState()
+
+        // Existing onResume code
+        if (!NetworkClient.isInitialized.value) {
+            NetworkClient.initialize(applicationContext)
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        // Clean up resources
+        if (isFinishing) {
+            // Only cleanup if activity is actually being destroyed, not recreated
+            NetworkClient.cleanup()
+            SettingsRepository.cleanup()
+            requestPermissionLauncher.unregister()
+        }
+    }
+
+    private fun updateServiceState() {
+        lifecycleScope.launch {
+            val isRunning = isServiceRunning()
+            val currentSettings = settingsRepository.settings.value
+
+            if (isRunning && !currentSettings.isServiceEnabled) {
+                // Service is running but settings show it's disabled
+                settingsRepository.updateSettings(currentSettings.copy(isServiceEnabled = true))
+            } else if (!isRunning && currentSettings.isServiceEnabled) {
+                // Service should be running but isn't
+                val serviceIntent = Intent(this@MainActivity, NotificationService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(serviceIntent)
+                } else {
+                    startService(serviceIntent)
+                }
             }
         }
     }
@@ -146,10 +241,20 @@ private fun MainScreen(viewModel: MainViewModel) {
     var selectedTab by remember { mutableIntStateOf(0) }
     val uiState by viewModel.uiState.collectAsState()
     val isInitialized by NetworkClient.isInitialized.collectAsState()
+    val context = LocalContext.current
 
-    LaunchedEffect(selectedTab) {
-        if (selectedTab == 0 && isInitialized) {
-            viewModel.refreshData()
+    // Effect to handle periodic refresh
+    LaunchedEffect(selectedTab, isInitialized) {
+        if (selectedTab == 0) {
+            while (true) {
+                if (isInitialized) {
+                    viewModel.refreshData()
+                } else {
+                    // If NetworkClient is not initialized, try to re-initialize
+                    NetworkClient.initialize(context.applicationContext)
+                }
+                delay(30000) // 30 seconds delay between refreshes
+            }
         }
     }
 
@@ -163,7 +268,15 @@ private fun MainScreen(viewModel: MainViewModel) {
             ),
             topBar = {
                 if (selectedTab == 0) {
-                    AppHeader(onRefresh = viewModel::refreshData)
+                    AppHeader(
+                        onRefresh = {
+                            if (isInitialized) {
+                                viewModel.refreshData()
+                            } else {
+                                NetworkClient.initialize(context.applicationContext)
+                            }
+                        }
+                    )
                 } else {
                     Box(
                         modifier = Modifier
@@ -259,6 +372,9 @@ private fun AppHeader(onRefresh: () -> Unit) {
         label = ""
     )
 
+    val torManager = remember { TorManager.getInstance() }
+    val torStatus by torManager.torStatus.collectAsState()
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -272,6 +388,49 @@ private fun AppHeader(onRefresh: () -> Unit) {
                 .size(300.dp)
                 .align(Alignment.Center)
         )
+
+        // Tor Status Indicator
+        if (torStatus == TorStatus.CONNECTED) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 26.5.dp, bottom = 18.5.dp)
+            ) {
+                var showTooltip by remember { mutableStateOf(false) }
+
+                IconButton(
+                    onClick = { showTooltip = !showTooltip },
+                    modifier = Modifier.size(24.dp)
+                ) {
+                    Image(
+                        painter = painterResource(id = R.drawable.ic_onion),
+                        contentDescription = "Tor Connected",
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+
+                if (showTooltip) {
+                    Popup(
+                        onDismissRequest = { showTooltip = false },
+                        alignment = Alignment.TopStart
+                    ) {
+                        Surface(
+                            modifier = Modifier.padding(8.dp),
+                            shape = MaterialTheme.shapes.medium,
+                            color = AppColors.DarkGray,
+                            tonalElevation = 4.dp
+                        ) {
+                            Text(
+                                text = "Tor Connected",
+                                modifier = Modifier.padding(12.dp),
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = Color.White
+                            )
+                        }
+                    }
+                }
+            }
+        }
 
         IconButton(
             onClick = {
@@ -304,6 +463,7 @@ private fun MainContent(
     modifier: Modifier = Modifier
 ) {
     val blockHeight by viewModel.blockHeight.observeAsState()
+    val blockTimestamp by viewModel.blockTimestamp.observeAsState()
     val feeRates by viewModel.feeRates.observeAsState()
     val mempoolInfo by viewModel.mempoolInfo.observeAsState()
 
@@ -313,6 +473,7 @@ private fun MainContent(
                 // Show loading cards if we haven't received any data yet
                 MainContentDisplay(
                     blockHeight = null,
+                    blockTimestamp = null,
                     feeRates = null,
                     mempoolInfo = null,
                     modifier = modifier
@@ -328,6 +489,7 @@ private fun MainContent(
         }
         else -> MainContentDisplay(
             blockHeight = blockHeight,
+            blockTimestamp = blockTimestamp,
             feeRates = feeRates,
             mempoolInfo = mempoolInfo,
             modifier = modifier
@@ -361,6 +523,7 @@ private fun ErrorDisplay(
 @Composable
 private fun MainContentDisplay(
     blockHeight: Int?,
+    blockTimestamp: Long?,
     feeRates: FeeRates?,
     mempoolInfo: MempoolInfo?,
     modifier: Modifier = Modifier
@@ -374,19 +537,49 @@ private fun MainContentDisplay(
     ) {
         DataCard(
             title = "Current Block Height",
-            value = blockHeight?.let {
-                String.format(Locale.US, "%,d", it)
-            },
             icon = Icons.Default.Numbers,
+            content = blockHeight?.let {
+                {
+                    Column {
+                        Text(
+                            text = String.format(Locale.US, "%,d", it),
+                            style = MaterialTheme.typography.headlineLarge,
+                            color = AppColors.DataGray
+                        )
+                        blockTimestamp?.let { timestamp ->
+                            val elapsedMinutes = (System.currentTimeMillis() / 1000 - timestamp) / 60
+                            Text(
+                                text = "(${elapsedMinutes} minutes ago)",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = AppColors.DataGray.copy(alpha = 0.7f)
+                            )
+                        }
+                    }
+                }
+            },
             isLoading = blockHeight == null
         )
 
         DataCard(
             title = "Mempool Size",
-            value = mempoolInfo?.let {
-                String.format(Locale.US, "%.2f vMB", it.vsize / 1_000_000.0)
-            },
             icon = Icons.Default.Speed,
+            content = mempoolInfo?.let {
+                {
+                    Column {
+                        Text(
+                            text = String.format(Locale.US, "%.2f vMB", it.vsize / 1_000_000.0),
+                            style = MaterialTheme.typography.headlineLarge,
+                            color = AppColors.DataGray
+                        )
+                        val blocksToClean = ceil(it.vsize / 1_000_000.0 / 1.5).toInt()
+                        Text(
+                            text = "(${blocksToClean} blocks to clear)",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = AppColors.DataGray.copy(alpha = 0.7f)
+                        )
+                    }
+                }
+            },
             isLoading = mempoolInfo == null
         )
 
@@ -418,12 +611,12 @@ private fun MainContentDisplay(
 @Composable
 private fun DataCard(
     title: String,
+    icon: ImageVector,
+    modifier: Modifier = Modifier,
     value: String? = null,
     content: (@Composable () -> Unit)? = null,
-    icon: ImageVector,
     tooltip: String? = null,
-    isLoading: Boolean = value == null && content == null,
-    @SuppressLint("ModifierParameter") modifier: Modifier = Modifier
+    isLoading: Boolean = value == null && content == null
 ) {
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -479,8 +672,8 @@ private fun DataCard(
                         style = MaterialTheme.typography.headlineMedium,
                         color = AppColors.DataGray
                     )
-                } else {
-                    content?.invoke()
+                } else if (content != null) {
+                    content()
                 }
             }
         }
@@ -559,8 +752,8 @@ private fun FeeRateRow(
 }
 
 @Composable
-private fun HistogramContent(mempoolInfo: MempoolInfo?) {
-    if (mempoolInfo != null && mempoolInfo.feeHistogram.isNotEmpty()) {
+private fun HistogramContent(mempoolInfo: MempoolInfo) {
+    if (mempoolInfo.feeHistogram.isNotEmpty()) {
         // Process histogram data first
         val sizeMap = mutableMapOf<String, Double>()
         var totalSize = 0.0
@@ -731,16 +924,12 @@ private fun NotificationsScreen(
     val settingsRepository = remember { SettingsRepository.getInstance(context) }
     val settings by settingsRepository.settings.collectAsState(NotificationSettings())
 
-    // Function to check if service is running
-    fun isServiceRunning(): Boolean {
-        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        return manager.activeNotifications.any { it.id == 1 }
-    }
-
-    // Use LaunchedEffect to update service state when screen is loaded
-    var isServiceRunning by remember { mutableStateOf(false) }
-    LaunchedEffect(Unit) {
-        isServiceRunning = isServiceRunning()
+    // Check if any notification type is enabled
+    val isAnyNotificationEnabled = settings.run {
+        blockNotificationsEnabled && (newBlockNotificationEnabled || specificBlockNotificationEnabled) ||
+                mempoolSizeNotificationsEnabled ||
+                feeRatesNotificationsEnabled ||
+                (txConfirmationEnabled && transactionId.isNotEmpty())
     }
 
     Column(
@@ -772,12 +961,14 @@ private fun NotificationsScreen(
                 }
             },
             modifier = Modifier.fillMaxWidth(),
+            enabled = settings.isServiceEnabled || isAnyNotificationEnabled,
             colors = ButtonDefaults.buttonColors(
-                containerColor = if (settings.isServiceEnabled) AppColors.WarningRed else AppColors.Orange
+                containerColor = if (settings.isServiceEnabled) AppColors.WarningRed else AppColors.Orange,
+                disabledContainerColor = AppColors.Orange.copy(alpha = 0.5f)
             )
         ) {
             Text(
-                text = if (settings.isServiceEnabled) "Disable Notification Service" else "Enable Notification Service",
+                text = if (settings.isServiceEnabled)"Stop Notification Service" else "Start Notification Service",
                 style = MaterialTheme.typography.titleMedium,
                 color = Color.White
             )
@@ -787,7 +978,7 @@ private fun NotificationsScreen(
         NotificationSection(
             config = NotificationSectionConfig(
                 title = stringResource(R.string.blocks_title),
-                description = stringResource(R.string.blocks_description),
+                description = "Get notified when blocks are mined.",
                 enabled = settings.blockNotificationsEnabled,
                 frequency = settings.blockCheckFrequency,
                 onEnabledChange = { newSettings ->
@@ -795,6 +986,45 @@ private fun NotificationsScreen(
                 },
                 onFrequencyChange = { newSettings ->
                     settingsRepository.updateSettings(settings.copy(blockCheckFrequency = newSettings))
+                }
+            ),
+            newBlockConfig = NewBlockConfig(
+                enabled = settings.newBlockNotificationEnabled,
+                frequency = settings.newBlockCheckFrequency,
+                onEnabledChange = { newSettings ->
+                    settingsRepository.updateSettings(settings.copy(
+                        newBlockNotificationEnabled = newSettings,
+                        hasNotifiedForNewBlock = false
+                    ))
+                },
+                onFrequencyChange = { newFrequency ->
+                    settingsRepository.updateSettings(settings.copy(
+                        newBlockCheckFrequency = newFrequency,
+                        hasNotifiedForNewBlock = false
+                    ))
+                }
+            ),
+            specificBlockConfig = SpecificBlockConfig(
+                enabled = settings.specificBlockNotificationEnabled,
+                frequency = settings.specificBlockCheckFrequency,
+                targetHeight = settings.targetBlockHeight,
+                onEnabledChange = { newSettings ->
+                    settingsRepository.updateSettings(settings.copy(
+                        specificBlockNotificationEnabled = newSettings,
+                        hasNotifiedForTargetBlock = false
+                    ))
+                },
+                onFrequencyChange = { newFrequency ->
+                    settingsRepository.updateSettings(settings.copy(
+                        specificBlockCheckFrequency = newFrequency,
+                        hasNotifiedForTargetBlock = false
+                    ))
+                },
+                onTargetHeightChange = { newHeight ->
+                    settingsRepository.updateSettings(settings.copy(
+                        targetBlockHeight = newHeight,
+                        hasNotifiedForTargetBlock = false
+                    ))
                 }
             )
         )
@@ -893,8 +1123,14 @@ private fun NotificationsScreen(
 
 @Composable
 private fun NotificationSection(
-    config: NotificationSectionConfig
+    config: NotificationSectionConfig,
+    newBlockConfig: NewBlockConfig? = null,
+    specificBlockConfig: SpecificBlockConfig? = null
 ) {
+    var debouncedBlockHeight by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+    var debounceJob by remember { mutableStateOf<Job?>(null) }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -907,6 +1143,7 @@ private fun NotificationSection(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // Main header with toggle
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -927,25 +1164,164 @@ private fun NotificationSection(
                 style = MaterialTheme.typography.titleMedium,
                 color = AppColors.DataGray
             )
-            if (config.enabled) {
-                OutlinedTextField(
-                    value = config.frequency.toString(),
-                    onValueChange = {
-                        it.toIntOrNull()?.let { value ->
-                            if (value > 0) config.onFrequencyChange(value)
+
+            if (config.enabled && newBlockConfig != null) {
+                // New Block Notifications Sub-section
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "New Block Alert",
+                                style = MaterialTheme.typography.titleMedium,
+                                color = AppColors.DataGray
+                            )
+                            Text(
+                                text = "When a new block is mined.",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = AppColors.DataGray.copy(alpha = 0.7f)
+                            )
                         }
-                    },
-                    label = { Text("Check Frequency (minutes)", color = AppColors.DataGray) },
-                    modifier = Modifier.fillMaxWidth(),
-                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    singleLine = true,
-                    colors = OutlinedTextFieldDefaults.colors(
-                        unfocusedBorderColor = AppColors.DataGray,
-                        focusedBorderColor = AppColors.Orange,
-                        unfocusedTextColor = AppColors.DataGray,
-                        focusedTextColor = AppColors.Orange
+                        Switch(
+                            checked = newBlockConfig.enabled,
+                            onCheckedChange = newBlockConfig.onEnabledChange,
+                            modifier = Modifier.scale(0.8f),
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = Color.White,
+                                checkedTrackColor = AppColors.Orange,
+                                checkedBorderColor = AppColors.Orange,
+                                uncheckedThumbColor = AppColors.DataGray,
+                                uncheckedTrackColor = AppColors.DarkerNavy,
+                                uncheckedBorderColor = Color.Gray
+                            )
+                        )
+                    }
+
+                    if (newBlockConfig.enabled) {
+                        OutlinedTextField(
+                            value = newBlockConfig.frequency.toString(),
+                            onValueChange = {
+                                it.toIntOrNull()?.let { value ->
+                                    if (value > 0) newBlockConfig.onFrequencyChange(value)
+                                }
+                            },
+                            label = { Text("Check Frequency (minutes)", color = AppColors.DataGray) },
+                            modifier = Modifier.fillMaxWidth(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                unfocusedBorderColor = AppColors.DataGray,
+                                focusedBorderColor = AppColors.Orange,
+                                unfocusedTextColor = AppColors.DataGray,
+                                focusedTextColor = AppColors.Orange
+                            )
+                        )
+                    }
+                }
+
+                // Specific Block Height Section
+                if (specificBlockConfig != null) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        color = AppColors.DataGray.copy(alpha = 0.5f)
                     )
-                )
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 16.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Block Height Alert",
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = AppColors.DataGray
+                                )
+                                Text(
+                                    text = "When a specific block height is reached.",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = AppColors.DataGray.copy(alpha = 0.7f)
+                                )
+                            }
+                            Switch(
+                                checked = specificBlockConfig.enabled,
+                                onCheckedChange = specificBlockConfig.onEnabledChange,
+                                modifier = Modifier.scale(0.8f),
+                                colors = SwitchDefaults.colors(
+                                    checkedThumbColor = Color.White,
+                                    checkedTrackColor = AppColors.Orange,
+                                    checkedBorderColor = AppColors.Orange,
+                                    uncheckedThumbColor = AppColors.DataGray,
+                                    uncheckedTrackColor = AppColors.DarkerNavy,
+                                    uncheckedBorderColor = Color.Gray
+                                )
+                            )
+                        }
+
+                        if (specificBlockConfig.enabled) {
+                            OutlinedTextField(
+                                value = debouncedBlockHeight,
+                                onValueChange = { newValue ->
+                                    debouncedBlockHeight = newValue
+                                    if (newValue.isNotEmpty()) {
+                                        newValue.toIntOrNull()?.let { value ->
+                                            if (value > 0) {
+                                                debounceJob?.cancel()
+                                                debounceJob = scope.launch {
+                                                    delay(4000) // 4 second debounce
+                                                    specificBlockConfig.onTargetHeightChange(value)
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
+                                label = { Text("Target Block Height", color = AppColors.DataGray) },
+                                modifier = Modifier.fillMaxWidth(),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                singleLine = true,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    unfocusedBorderColor = AppColors.DataGray,
+                                    focusedBorderColor = AppColors.Orange,
+                                    unfocusedTextColor = AppColors.DataGray,
+                                    focusedTextColor = AppColors.Orange
+                                )
+                            )
+
+                            OutlinedTextField(
+                                value = specificBlockConfig.frequency.toString(),
+                                onValueChange = {
+                                    it.toIntOrNull()?.let { value ->
+                                        if (value > 0) specificBlockConfig.onFrequencyChange(value)
+                                    }
+                                },
+                                label = { Text("Check Frequency (minutes)", color = AppColors.DataGray) },
+                                modifier = Modifier.fillMaxWidth(),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                singleLine = true,
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    unfocusedBorderColor = AppColors.DataGray,
+                                    focusedBorderColor = AppColors.Orange,
+                                    unfocusedTextColor = AppColors.DataGray,
+                                    focusedTextColor = AppColors.Orange
+                                )
+                            )
+                        }
+                    }
+                }
             }
         }
     }
@@ -962,6 +1338,10 @@ private fun MempoolSizeNotificationSection(
     onThresholdChange: (Float) -> Unit,
     onAboveThresholdChange: (Boolean) -> Unit
 ) {
+    var debouncedThreshold by remember { mutableFloatStateOf(threshold) }
+    val scope = rememberCoroutineScope()
+    var debounceJob by remember { mutableStateOf<Job?>(null) }
+
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -1003,15 +1383,22 @@ private fun MempoolSizeNotificationSection(
                         onToggleChange = onAboveThresholdChange
                     )
                     OutlinedTextField(
-                        value = threshold.toString(),
-                        onValueChange = {
-                            it.toFloatOrNull()?.let { value ->
-                                if (value > 0) onThresholdChange(value)
+                        value = debouncedThreshold.toString(),
+                        onValueChange = { newValue ->
+                            newValue.toFloatOrNull()?.let { value ->
+                                if (value > 0) {
+                                    debouncedThreshold = value
+                                    debounceJob?.cancel()
+                                    debounceJob = scope.launch {
+                                        delay(1000) // 1 second debounce
+                                        onThresholdChange(value)
+                                    }
+                                }
                             }
                         },
                         label = { Text("Threshold (vMB)", color = AppColors.DataGray) },
                         modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
                             unfocusedBorderColor = AppColors.DataGray,
@@ -1058,6 +1445,9 @@ private fun FeeRatesNotificationSection(
     onAboveThresholdChange: (Boolean) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
+    var debouncedThreshold by remember { mutableIntStateOf(threshold) }
+    val scope = rememberCoroutineScope()
+    var debounceJob by remember { mutableStateOf<Job?>(null) }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1101,10 +1491,17 @@ private fun FeeRatesNotificationSection(
                     )
 
                     OutlinedTextField(
-                        value = threshold.toString(),
-                        onValueChange = {
-                            it.toIntOrNull()?.let { value ->
-                                if (value > 0) onThresholdChange(value)
+                        value = debouncedThreshold.toString(),
+                        onValueChange = { newValue ->
+                            newValue.toIntOrNull()?.let { value ->
+                                if (value > 0) {
+                                    debouncedThreshold = value
+                                    debounceJob?.cancel()
+                                    debounceJob = scope.launch {
+                                        delay(1000) // 1 second debounce
+                                        onThresholdChange(value)
+                                    }
+                                }
                             }
                         },
                         label = { Text("Threshold (sat/vB)", color = AppColors.DataGray) },
@@ -1301,6 +1698,7 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
     val torManager = remember { TorManager.getInstance() }
     val torStatus by torManager.torStatus.collectAsState()
     var torEnabled by remember { mutableStateOf(torManager.isTorEnabled()) }
+    var updateFrequency by remember { mutableLongStateOf(settingsRepository.getUpdateFrequency()) }
 
     var selectedOption by remember {
         mutableIntStateOf(
@@ -1387,6 +1785,7 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
             color = AppColors.Orange
         )
 
+        // Mempool Server Card
         Card(
             colors = CardDefaults.cardColors(
                 containerColor = AppColors.DarkerNavy
@@ -1503,7 +1902,8 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                             }
                         }
                     }
-                    // Tor controls follow here...
+
+                    // Tor controls
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -1562,16 +1962,13 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                                 checkedTrackColor = AppColors.Orange,
                                 uncheckedThumbColor = AppColors.DataGray,
                                 uncheckedTrackColor = AppColors.DarkerNavy,
-                                disabledCheckedThumbColor = AppColors.Orange.copy(alpha = 0.5f),
-                                disabledCheckedTrackColor = AppColors.Orange.copy(alpha = 0.3f),
-                                disabledUncheckedThumbColor = AppColors.DataGray,
-                                disabledUncheckedTrackColor = AppColors.DataGray
+                                checkedBorderColor = Color.Gray,
+                                uncheckedBorderColor = Color.Gray
                             )
                         )
                     }
                 }
 
-                // Add the Test Server button next to the Save button
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1592,8 +1989,102 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
             }
         }
 
+        // Widget Settings Card
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = AppColors.DarkerNavy
+            )
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Widgets",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = AppColors.Orange
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    TooltipButton(
+                        tooltip = "Widgets can be manually updated by tapping them once. " +
+                                "You can also double tap any widget to open the Mempal app."
+                    )
+                }
+
+                var expanded by remember { mutableStateOf(false) }
+                ExposedDropdownMenuBox(
+                    expanded = expanded,
+                    onExpandedChange = { expanded = !expanded }
+                ) {
+                    OutlinedTextField(
+                        value = when (updateFrequency) {
+                            60L -> "1 hour"
+                            180L -> "3 hours"
+                            360L -> "6 hours"
+                            else -> "$updateFrequency minutes"
+                        },
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text("Update Frequency") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor()
+                            .padding(top = 16.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = AppColors.Orange,
+                            unfocusedBorderColor = AppColors.DataGray,
+                            focusedLabelColor = AppColors.Orange
+                        )
+                    )
+
+                    ExposedDropdownMenu(
+                        expanded = expanded,
+                        onDismissRequest = { expanded = false }
+                    ) {
+                        listOf(15L, 30L, 60L, 180L).forEach { minutes ->
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        when (minutes) {
+                                            60L -> "1 hour"
+                                            180L -> "3 hours"
+                                            else -> "$minutes minutes"
+                                        }
+                                    )
+                                },
+                                onClick = {
+                                    updateFrequency = minutes
+                                    settingsRepository.saveUpdateFrequency(minutes)
+                                    WidgetUpdater.scheduleUpdates(context)
+                                    expanded = false
+                                },
+                                contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
+                            )
+                        }
+                    }
+                }
+
+                Text(
+                    text = when (updateFrequency) {
+                        60L -> "Widgets will update every hour."
+                        180L -> "Widgets will update every 3 hours."
+                        else -> "Widgets will update every $updateFrequency minutes."
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppColors.DataGray,
+                    modifier = Modifier.padding(top = 4.dp, start = 16.dp)
+                )
+            }
+        }
+
         Spacer(modifier = Modifier.weight(1f))
 
+        // Footer
         Column(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1714,6 +2205,7 @@ private fun ThresholdToggle(
             Switch(
                 checked = isAboveThreshold,
                 onCheckedChange = onToggleChange,
+                modifier = Modifier.scale(0.8f),
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = Color.White,
                     checkedTrackColor = AppColors.DarkerNavy,

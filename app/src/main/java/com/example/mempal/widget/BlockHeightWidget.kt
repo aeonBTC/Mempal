@@ -9,19 +9,54 @@ import android.content.Intent
 import android.widget.RemoteViews
 import com.example.mempal.R
 import com.example.mempal.api.NetworkClient
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
 import java.util.Locale
 
 class BlockHeightWidget : AppWidgetProvider() {
     companion object {
-        private const val REFRESH_ACTION = "com.example.mempal.REFRESH_BLOCK_HEIGHT_WIDGET"
+        const val REFRESH_ACTION = "com.example.mempal.REFRESH_BLOCK_HEIGHT_WIDGET"
+        private var widgetScope: CoroutineScope? = null
+    }
+
+    private fun getOrCreateScope(): CoroutineScope {
+        return widgetScope ?: CoroutineScope(SupervisorJob() + Dispatchers.IO).also { widgetScope = it }
+    }
+
+    override fun onEnabled(context: Context) {
+        super.onEnabled(context)
+        getOrCreateScope() // Initialize scope when widget is enabled
+        WidgetUpdater.scheduleUpdates(context)
+    }
+
+    override fun onDisabled(context: Context) {
+        super.onDisabled(context)
+        // Only cancel updates if no other widgets are active
+        val appWidgetManager = AppWidgetManager.getInstance(context)
+        val combinedStatsWidget = ComponentName(context, CombinedStatsWidget::class.java)
+        val mempoolSizeWidget = ComponentName(context, MempoolSizeWidget::class.java)
+        
+        if (appWidgetManager.getAppWidgetIds(combinedStatsWidget).isEmpty() &&
+            appWidgetManager.getAppWidgetIds(mempoolSizeWidget).isEmpty()) {
+            WidgetUpdater.cancelUpdates(context)
+            // Cancel any ongoing coroutines
+            widgetScope?.cancel()
+            widgetScope = null
+        }
     }
 
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
         if (intent.action == REFRESH_ACTION) {
+            if (WidgetUtils.isDoubleTap()) {
+                val launchIntent = WidgetUtils.getLaunchAppIntent(context)
+                try {
+                    launchIntent.send()
+                    return
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+            
             val appWidgetManager = AppWidgetManager.getInstance(context)
             val componentName = ComponentName(context, BlockHeightWidget::class.java)
             val appWidgetIds = appWidgetManager.getAppWidgetIds(componentName)
@@ -51,15 +86,33 @@ class BlockHeightWidget : AppWidgetProvider() {
         views.setOnClickPendingIntent(R.id.widget_layout, refreshPendingIntent)
         
         views.setTextViewText(R.id.block_height, "...")
+        views.setTextViewText(R.id.elapsed_time, "")
         appWidgetManager.updateAppWidget(appWidgetId, views)
 
-        CoroutineScope(Dispatchers.IO).launch {
+        getOrCreateScope().launch {
             try {
-                val response = NetworkClient.mempoolApi.getBlockHeight()
-                if (response.isSuccessful) {
-                    response.body()?.let { blockHeight ->
+                val blockHeightResponse = NetworkClient.mempoolApi.getBlockHeight()
+                if (blockHeightResponse.isSuccessful) {
+                    blockHeightResponse.body()?.let { blockHeight ->
                         views.setTextViewText(R.id.block_height, 
                             String.format(Locale.US, "%,d", blockHeight))
+                        
+                        // Get block timestamp
+                        val blockHashResponse = NetworkClient.mempoolApi.getLatestBlockHash()
+                        if (blockHashResponse.isSuccessful) {
+                            val hash = blockHashResponse.body()
+                            if (hash != null) {
+                                val blockInfoResponse = NetworkClient.mempoolApi.getBlockInfo(hash)
+                                if (blockInfoResponse.isSuccessful) {
+                                    blockInfoResponse.body()?.timestamp?.let { timestamp ->
+                                        val elapsedMinutes = (System.currentTimeMillis() / 1000 - timestamp) / 60
+                                        views.setTextViewText(R.id.elapsed_time, 
+                                            "(${elapsedMinutes} minutes ago)")
+                                    }
+                                }
+                            }
+                        }
+                        
                         appWidgetManager.updateAppWidget(appWidgetId, views)
                     }
                 }

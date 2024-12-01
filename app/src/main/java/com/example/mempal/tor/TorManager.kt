@@ -3,15 +3,12 @@ package com.example.mempal.tor
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.launch
 import org.torproject.jni.TorService
 import java.io.File
+import java.lang.ref.WeakReference
 
 enum class TorStatus {
     DISCONNECTED,
@@ -25,10 +22,9 @@ class TorManager private constructor() {
     private val _torStatus = MutableStateFlow(TorStatus.DISCONNECTED)
     val torStatus: StateFlow<TorStatus> = _torStatus
     private var dataDir: File? = null
-    private lateinit var prefs: SharedPreferences
+    private var prefsRef: WeakReference<SharedPreferences>? = null
     private val _proxyReady = MutableStateFlow(false)
-    val proxyReady: StateFlow<Boolean> = _proxyReady
-    private val scope = CoroutineScope(Dispatchers.Main + Job())
+    private var scope: CoroutineScope? = null
 
     companion object {
         @Volatile
@@ -43,11 +39,17 @@ class TorManager private constructor() {
                 instance ?: TorManager().also { instance = it }
             }
         }
+
     }
 
     fun initialize(context: Context) {
         try {
-            prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            scope?.cancel()
+            scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+            
+            val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefsRef = WeakReference(prefs)
+            
             val dir = File(context.filesDir, "tor")
             if (!dir.exists()) {
                 dir.mkdirs()
@@ -74,11 +76,11 @@ class TorManager private constructor() {
             }
             context.startService(intent)
 
-            scope.launch {
+            scope?.launch {
                 delay(5100)
                 _torStatus.value = TorStatus.CONNECTED
                 _proxyReady.value = true
-                prefs.edit().putBoolean(KEY_TOR_ENABLED, true).apply()
+                prefsRef?.get()?.edit()?.putBoolean(KEY_TOR_ENABLED, true)?.apply()
             }
         } catch (e: Exception) {
             _torStatus.value = TorStatus.ERROR
@@ -95,7 +97,7 @@ class TorManager private constructor() {
             context.stopService(intent)
             _torStatus.value = TorStatus.DISCONNECTED
             _proxyReady.value = false
-            prefs.edit().putBoolean(KEY_TOR_ENABLED, false).apply()
+            prefsRef?.get()?.edit()?.putBoolean(KEY_TOR_ENABLED, false)?.apply()
         } catch (e: Exception) {
             _torStatus.value = TorStatus.ERROR
             e.printStackTrace()
@@ -103,6 +105,6 @@ class TorManager private constructor() {
     }
 
     fun isTorEnabled(): Boolean {
-        return prefs.getBoolean(KEY_TOR_ENABLED, false)
+        return prefsRef?.get()?.getBoolean(KEY_TOR_ENABLED, false) == true
     }
 }

@@ -26,4 +26,13 @@
         android:textStyle="bold"
         android:layout_marginTop="2dp" />
 
+    <TextView
+        android:id="@+id/mempool_blocks_to_clear"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textColor="#FFFFFF"
+        android:textSize="12sp"
+        android:alpha="0.7"
+        android:layout_marginTop="2dp" />
+
 </LinearLayout> 

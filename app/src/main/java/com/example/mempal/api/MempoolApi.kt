@@ -8,6 +8,12 @@ interface MempoolApi {
     @GET("api/blocks/tip/height")
     suspend fun getBlockHeight(): Response<Int>
 
+    @GET("api/blocks/tip/hash")
+    suspend fun getLatestBlockHash(): Response<String>
+
+    @GET("api/block/{hash}")
+    suspend fun getBlockInfo(@Path("hash") hash: String): Response<BlockInfo>
+
     @GET("api/v1/fees/recommended")
     suspend fun getFeeRates(): Response<FeeRates>
 
@@ -32,4 +38,10 @@ data class TransactionStatus(
     val block_height: Int,
     val block_hash: String,
     val block_time: Long
+)
+
+data class BlockInfo(
+    val id: String,
+    val height: Int,
+    val timestamp: Long
 )

@@ -9,19 +9,55 @@ import android.content.Intent
 import android.widget.RemoteViews
 import com.example.mempal.R
 import com.example.mempal.api.NetworkClient
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.*
 import java.util.Locale
+import kotlin.math.ceil
 
 class MempoolSizeWidget : AppWidgetProvider() {
     companion object {
-        private const val REFRESH_ACTION = "com.example.mempal.REFRESH_MEMPOOL_SIZE_WIDGET"
+        const val REFRESH_ACTION = "com.example.mempal.REFRESH_MEMPOOL_SIZE_WIDGET"
+        private var widgetScope: CoroutineScope? = null
+    }
+
+    private fun getOrCreateScope(): CoroutineScope {
+        return widgetScope ?: CoroutineScope(SupervisorJob() + Dispatchers.IO).also { widgetScope = it }
+    }
+
+    override fun onEnabled(context: Context) {
+        super.onEnabled(context)
+        getOrCreateScope() // Initialize scope when widget is enabled
+        WidgetUpdater.scheduleUpdates(context)
+    }
+
+    override fun onDisabled(context: Context) {
+        super.onDisabled(context)
+        // Only cancel updates if no other widgets are active
+        val appWidgetManager = AppWidgetManager.getInstance(context)
+        val blockHeightWidget = ComponentName(context, BlockHeightWidget::class.java)
+        val combinedStatsWidget = ComponentName(context, CombinedStatsWidget::class.java)
+        
+        if (appWidgetManager.getAppWidgetIds(blockHeightWidget).isEmpty() &&
+            appWidgetManager.getAppWidgetIds(combinedStatsWidget).isEmpty()) {
+            WidgetUpdater.cancelUpdates(context)
+            // Cancel any ongoing coroutines
+            widgetScope?.cancel()
+            widgetScope = null
+        }
     }
 
     override fun onReceive(context: Context, intent: Intent) {
         super.onReceive(context, intent)
         if (intent.action == REFRESH_ACTION) {
+            if (WidgetUtils.isDoubleTap()) {
+                val launchIntent = WidgetUtils.getLaunchAppIntent(context)
+                try {
+                    launchIntent.send()
+                    return
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }
+            
             val appWidgetManager = AppWidgetManager.getInstance(context)
             val componentName = ComponentName(context, MempoolSizeWidget::class.java)
             val appWidgetIds = appWidgetManager.getAppWidgetIds(componentName)
@@ -49,17 +85,24 @@ class MempoolSizeWidget : AppWidgetProvider() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         views.setOnClickPendingIntent(R.id.widget_layout, refreshPendingIntent)
-
+        
         views.setTextViewText(R.id.mempool_size, "...")
+        views.setTextViewText(R.id.mempool_blocks_to_clear, "")
         appWidgetManager.updateAppWidget(appWidgetId, views)
 
-        CoroutineScope(Dispatchers.IO).launch {
+        getOrCreateScope().launch {
             try {
                 val response = NetworkClient.mempoolApi.getMempoolInfo()
                 if (response.isSuccessful) {
                     response.body()?.let { mempoolInfo ->
-                        val sizeInMB = String.format(Locale.US, "%.2f vMB", mempoolInfo.vsize / 1_000_000.0)
-                        views.setTextViewText(R.id.mempool_size, sizeInMB)
+                        val sizeInMB = mempoolInfo.vsize / 1_000_000.0
+                        views.setTextViewText(R.id.mempool_size, 
+                            String.format(Locale.US, "%.2f vMB", sizeInMB))
+                            
+                        val blocksToClean = ceil(sizeInMB / 1.5).toInt()
+                        views.setTextViewText(R.id.mempool_blocks_to_clear,
+                            "(${blocksToClean} blocks to clear)")
+                            
                         appWidgetManager.updateAppWidget(appWidgetId, views)
                     }
                 }

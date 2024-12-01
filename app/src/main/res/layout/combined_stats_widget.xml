@@ -14,6 +14,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
+        android:baselineAligned="false"
         android:layout_marginBottom="16dp">
 
         <LinearLayout
@@ -26,28 +27,18 @@
             android:gravity="center"
             android:layout_marginEnd="8dp">
 
-            <LinearLayout
+            <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center"
-                android:layout_marginBottom="4dp">
-
-                <ImageView
-                    android:layout_width="20dp"
-                    android:layout_height="20dp"
-                    android:src="@drawable/ic_baseline_numbers_24"
-                    android:tint="#FF9800"
-                    app:tint="#FF9800"
-                    android:layout_marginEnd="6dp"/>
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Block Height"
-                    android:textColor="#FF9800"
-                    android:textSize="16sp"/>
-            </LinearLayout>
+                android:text="@string/block_height_label"
+                android:textColor="#FF9800"
+                android:textSize="16sp"
+                app:drawableStartCompat="@drawable/ic_baseline_numbers_24"
+                app:drawableTint="#FF9800"
+                app:drawableTintMode="src_in"
+                android:drawablePadding="6dp"
+                android:layout_marginBottom="4dp"
+                android:gravity="center"/>
 
             <TextView
                 android:id="@+id/block_height"
@@ -57,6 +48,16 @@
                 android:textSize="24sp"
                 android:textStyle="bold"
                 android:gravity="center"/>
+
+            <TextView
+                android:id="@+id/elapsed_time"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                android:alpha="0.7"
+                android:gravity="center"
+                android:layout_marginTop="2dp"/>
         </LinearLayout>
 
         <LinearLayout
@@ -65,30 +66,21 @@
             android:layout_weight="1"
             android:orientation="vertical"
             android:background="@drawable/stats_card_background"
-            android:padding="12dp">
+            android:padding="12dp"
+            android:gravity="center">
 
-            <LinearLayout
+            <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal"
-                android:gravity="center_vertical"
-                android:layout_marginBottom="4dp">
-
-                <ImageView
-                    android:layout_width="20dp"
-                    android:layout_height="20dp"
-                    android:src="@drawable/ic_baseline_speed_24"
-                    android:tint="#FF9800"
-                    app:tint="#FF9800"
-                    android:layout_marginEnd="6dp"/>
-
-                <TextView
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:text="Mempool Size"
-                    android:textColor="#FF9800"
-                    android:textSize="16sp"/>
-            </LinearLayout>
+                android:text="@string/mempool_size_label"
+                android:textColor="#FF9800"
+                android:textSize="16sp"
+                app:drawableStartCompat="@drawable/ic_baseline_speed_24"
+                app:drawableTint="#FF9800"
+                app:drawableTintMode="src_in"
+                android:drawablePadding="6dp"
+                android:layout_marginBottom="4dp"
+                android:gravity="center"/>
 
             <TextView
                 android:id="@+id/mempool_size"
@@ -96,7 +88,18 @@
                 android:layout_height="wrap_content"
                 android:textColor="#FFFFFF"
                 android:textSize="24sp"
-                android:textStyle="bold"/>
+                android:textStyle="bold"
+                android:gravity="center"/>
+
+            <TextView
+                android:id="@+id/mempool_blocks_to_clear"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:textColor="#FFFFFF"
+                android:textSize="12sp"
+                android:alpha="0.7"
+                android:gravity="center"
+                android:layout_marginTop="2dp"/>
         </LinearLayout>
     </LinearLayout>
 
@@ -104,6 +107,7 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="horizontal"
+        android:baselineAligned="false"
         android:background="@drawable/stats_card_background"
         android:padding="12dp">
 
@@ -117,14 +121,16 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="1 Block"
+                android:text="@string/one_block_label"
                 android:textColor="#FF9800"
                 android:textSize="14sp"/>
 
             <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal">
+                android:orientation="horizontal"
+                android:baselineAligned="false"
+                android:gravity="center">
 
                 <TextView
                     android:id="@+id/priority_fee"
@@ -137,7 +143,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text=" sat/vB"
+                    android:text="@string/sat_vb_unit"
                     android:textColor="#FFFFFF"
                     android:textSize="12sp"
                     android:alpha="0.7"/>
@@ -154,14 +160,16 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="3 Blocks"
+                android:text="@string/three_blocks_label"
                 android:textColor="#FF9800"
                 android:textSize="14sp"/>
 
             <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal">
+                android:orientation="horizontal"
+                android:baselineAligned="false"
+                android:gravity="center">
 
                 <TextView
                     android:id="@+id/standard_fee"
@@ -174,7 +182,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text=" sat/vB"
+                    android:text="@string/sat_vb_unit"
                     android:textColor="#FFFFFF"
                     android:textSize="12sp"
                     android:alpha="0.7"/>
@@ -191,14 +199,16 @@
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="6 Blocks"
+                android:text="@string/six_blocks_label"
                 android:textColor="#FF9800"
                 android:textSize="14sp"/>
 
             <LinearLayout
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:orientation="horizontal">
+                android:orientation="horizontal"
+                android:baselineAligned="false"
+                android:gravity="center">
 
                 <TextView
                     android:id="@+id/economy_fee"
@@ -211,7 +221,7 @@
                 <TextView
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text=" sat/vB"
+                    android:text="@string/sat_vb_unit"
                     android:textColor="#FFFFFF"
                     android:textSize="12sp"
                     android:alpha="0.7"/>

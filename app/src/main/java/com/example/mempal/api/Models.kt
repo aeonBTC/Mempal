@@ -11,7 +11,7 @@ data class FeeRates(
 
 data class MempoolInfo(
     @SerializedName("vsize") val vsize: Long = 0L,
-    @SerializedName("total_fee") val totalFee: Long = 0L,
+    @SerializedName("total_fee") val totalFee: Double = 0.0,
     @SerializedName("unconfirmed_count") val unconfirmedCount: Int = 0,
     @SerializedName("fee_histogram") val feeHistogram: List<List<Double>> = emptyList()
 )
