@@ -1,6 +1,6 @@
 # Mempal
 
-![mempal](https://github.com/user-attachments/assets/02c9cea3-9058-480c-9fd3-2f5057fbe3a9)
+![mempal_screens](https://github.com/user-attachments/assets/35574609-bfec-4414-9656-9f0666760e61)
 
 
 ### Mempal is a Bitcoin monitoring app that allows users to effortlessly track real-time fee rates and mempool depth for smarter transaction management.
