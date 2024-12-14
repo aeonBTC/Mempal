@@ -1,0 +1,109 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- Gradients -->
+    <defs>
+        <radialGradient id="bgGradient" cx="256" cy="256" r="240" gradientUnits="userSpaceOnUse">
+            <stop offset="0%" style="stop-color:#081018"/>
+            <stop offset="75%" style="stop-color:#0F2135"/>
+            <stop offset="100%" style="stop-color:#0F2135"/>
+        </radialGradient>
+        <linearGradient id="whiteGradient" x1="256" y1="156" x2="256" y2="356">
+            <stop offset="0%" style="stop-color:#F4F4F4"/>
+            <stop offset="100%" style="stop-color:#F4F4F4"/>
+        </linearGradient>
+    </defs>
+    
+    <!-- Background Circle -->
+    <circle cx="256" cy="256" r="240" fill="url(#bgGradient)"/>
+    
+    <!-- Outer Circuit Connection Glow -->
+    <path d="M256 66
+             L426 156
+             L426 356
+             L256 446
+             L86 356
+             L86 156
+             Z" 
+          fill="none"
+          stroke="#EC910C"
+          stroke-width="14"
+          opacity="0.2"/>
+    
+    <!-- Outer Circuit Connection -->
+    <path d="M256 66
+             L426 156
+             L426 356
+             L256 446
+             L86 356
+             L86 156
+             Z" 
+          fill="none"
+          stroke="#EC910C"
+          stroke-width="10"/>
+    
+    <!-- Main Hexagonal Frame -->
+    <path d="M256 156
+             L346 196
+             L346 316
+             L256 356
+             L166 316
+             L166 196
+             Z" 
+          fill="none"
+          stroke="url(#whiteGradient)"
+          stroke-width="10"/>
+    
+    <!-- M Shape Lines -->
+    <path d="M166 196
+             L166 316" 
+          stroke="#F4F4F4"
+          stroke-width="10"/>
+    <path d="M346 196
+             L346 316" 
+          stroke="#F4F4F4"
+          stroke-width="10"/>
+    <path d="M166 196
+             L256 236
+             L346 196" 
+          stroke="#F4F4F4"
+          stroke-width="10"/>
+    <path d="M256 236
+             L256 356" 
+          stroke="#F4F4F4"
+          stroke-width="10"/>
+    
+    <!-- Circuit Lines Glow -->
+    <line x1="256" y1="156" x2="256" y2="66" stroke="#EC910C" stroke-width="14" opacity="0.2"/>
+    <line x1="346" y1="196" x2="426" y2="156" stroke="#EC910C" stroke-width="14" opacity="0.2"/>
+    <line x1="346" y1="316" x2="426" y2="356" stroke="#EC910C" stroke-width="14" opacity="0.2"/>
+    <line x1="256" y1="356" x2="256" y2="446" stroke="#EC910C" stroke-width="14" opacity="0.2"/>
+    <line x1="166" y1="316" x2="86" y2="356" stroke="#EC910C" stroke-width="14" opacity="0.2"/>
+    <line x1="166" y1="196" x2="86" y2="156" stroke="#EC910C" stroke-width="14" opacity="0.2"/>
+    
+    <!-- Circuit Lines -->
+    <line x1="256" y1="156" x2="256" y2="66" stroke="#EC910C" stroke-width="10"/>
+    <line x1="346" y1="196" x2="426" y2="156" stroke="#EC910C" stroke-width="10"/>
+    <line x1="346" y1="316" x2="426" y2="356" stroke="#EC910C" stroke-width="10"/>
+    <line x1="256" y1="356" x2="256" y2="446" stroke="#EC910C" stroke-width="10"/>
+    <line x1="166" y1="316" x2="86" y2="356" stroke="#EC910C" stroke-width="10"/>
+    <line x1="166" y1="196" x2="86" y2="156" stroke="#EC910C" stroke-width="10"/>
+    
+    <!-- Main Connection Nodes -->
+    <circle cx="256" cy="156" r="14" fill="#EC910C"/>
+    <circle cx="346" cy="196" r="14" fill="#EC910C"/>
+    <circle cx="346" cy="316" r="14" fill="#EC910C"/>
+    <circle cx="256" cy="356" r="14" fill="#EC910C"/>
+    <circle cx="166" cy="316" r="14" fill="#EC910C"/>
+    <circle cx="166" cy="196" r="14" fill="#EC910C"/>
+    
+    <!-- Center Node -->
+    <circle cx="256" cy="236" r="14" fill="#EC910C"/>
+    
+    <!-- End Nodes -->
+    <circle cx="256" cy="66" r="16" fill="#F4F4F4"/>
+    <circle cx="426" cy="156" r="16" fill="#F4F4F4"/>
+    <circle cx="426" cy="356" r="16" fill="#F4F4F4"/>
+    <circle cx="256" cy="446" r="16" fill="#F4F4F4"/>
+    <circle cx="86" cy="356" r="16" fill="#F4F4F4"/>
+    <circle cx="86" cy="156" r="16" fill="#F4F4F4"/>
+</svg> 

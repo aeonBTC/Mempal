@@ -6,7 +6,7 @@
     android:layout_height="wrap_content"
     android:background="@drawable/widget_background"
     android:orientation="vertical"
-    android:padding="16dp"
+    android:padding="12dp"
     android:clickable="true"
     android:focusable="true">
 
@@ -15,7 +15,7 @@
         android:layout_height="wrap_content"
         android:orientation="horizontal"
         android:baselineAligned="false"
-        android:layout_marginBottom="16dp">
+        android:layout_marginBottom="12dp">
 
         <LinearLayout
             android:layout_width="0dp"
@@ -23,21 +23,21 @@
             android:layout_weight="1"
             android:orientation="vertical"
             android:background="@drawable/stats_card_background"
-            android:padding="12dp"
+            android:padding="8dp"
             android:gravity="center"
-            android:layout_marginEnd="8dp">
+            android:layout_marginEnd="6dp">
 
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/block_height_label"
                 android:textColor="#FF9800"
-                android:textSize="16sp"
+                android:textSize="14sp"
                 app:drawableStartCompat="@drawable/ic_baseline_numbers_24"
                 app:drawableTint="#FF9800"
                 app:drawableTintMode="src_in"
-                android:drawablePadding="6dp"
-                android:layout_marginBottom="4dp"
+                android:drawablePadding="4dp"
+                android:layout_marginBottom="2dp"
                 android:gravity="center"/>
 
             <TextView
@@ -45,7 +45,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:textColor="#FFFFFF"
-                android:textSize="24sp"
+                android:textSize="20sp"
                 android:textStyle="bold"
                 android:gravity="center"/>
 
@@ -54,10 +54,10 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:textColor="#FFFFFF"
-                android:textSize="12sp"
+                android:textSize="11sp"
                 android:alpha="0.7"
                 android:gravity="center"
-                android:layout_marginTop="2dp"/>
+                android:layout_marginTop="1dp"/>
         </LinearLayout>
 
         <LinearLayout
@@ -66,7 +66,7 @@
             android:layout_weight="1"
             android:orientation="vertical"
             android:background="@drawable/stats_card_background"
-            android:padding="12dp"
+            android:padding="8dp"
             android:gravity="center">
 
             <TextView
@@ -74,12 +74,12 @@
                 android:layout_height="wrap_content"
                 android:text="@string/mempool_size_label"
                 android:textColor="#FF9800"
-                android:textSize="16sp"
+                android:textSize="14sp"
                 app:drawableStartCompat="@drawable/ic_baseline_speed_24"
                 app:drawableTint="#FF9800"
                 app:drawableTintMode="src_in"
-                android:drawablePadding="6dp"
-                android:layout_marginBottom="4dp"
+                android:drawablePadding="4dp"
+                android:layout_marginBottom="2dp"
                 android:gravity="center"/>
 
             <TextView
@@ -87,7 +87,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:textColor="#FFFFFF"
-                android:textSize="24sp"
+                android:textSize="20sp"
                 android:textStyle="bold"
                 android:gravity="center"/>
 
@@ -96,10 +96,10 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:textColor="#FFFFFF"
-                android:textSize="12sp"
+                android:textSize="11sp"
                 android:alpha="0.7"
                 android:gravity="center"
-                android:layout_marginTop="2dp"/>
+                android:layout_marginTop="1dp"/>
         </LinearLayout>
     </LinearLayout>
 
@@ -109,7 +109,7 @@
         android:orientation="horizontal"
         android:baselineAligned="false"
         android:background="@drawable/stats_card_background"
-        android:padding="12dp">
+        android:padding="8dp">
 
         <LinearLayout
             android:layout_width="0dp"
@@ -123,7 +123,7 @@
                 android:layout_height="wrap_content"
                 android:text="@string/one_block_label"
                 android:textColor="#FF9800"
-                android:textSize="14sp"/>
+                android:textSize="12sp"/>
 
             <LinearLayout
                 android:layout_width="wrap_content"
@@ -137,7 +137,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:textColor="#FFFFFF"
-                    android:textSize="20sp"
+                    android:textSize="18sp"
                     android:textStyle="bold"/>
 
                 <TextView
@@ -145,7 +145,7 @@
                     android:layout_height="wrap_content"
                     android:text="@string/sat_vb_unit"
                     android:textColor="#FFFFFF"
-                    android:textSize="12sp"
+                    android:textSize="11sp"
                     android:alpha="0.7"/>
             </LinearLayout>
         </LinearLayout>
@@ -162,7 +162,7 @@
                 android:layout_height="wrap_content"
                 android:text="@string/three_blocks_label"
                 android:textColor="#FF9800"
-                android:textSize="14sp"/>
+                android:textSize="12sp"/>
 
             <LinearLayout
                 android:layout_width="wrap_content"
@@ -176,7 +176,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:textColor="#FFFFFF"
-                    android:textSize="20sp"
+                    android:textSize="18sp"
                     android:textStyle="bold"/>
 
                 <TextView
@@ -184,7 +184,7 @@
                     android:layout_height="wrap_content"
                     android:text="@string/sat_vb_unit"
                     android:textColor="#FFFFFF"
-                    android:textSize="12sp"
+                    android:textSize="11sp"
                     android:alpha="0.7"/>
             </LinearLayout>
         </LinearLayout>
@@ -201,7 +201,7 @@
                 android:layout_height="wrap_content"
                 android:text="@string/six_blocks_label"
                 android:textColor="#FF9800"
-                android:textSize="14sp"/>
+                android:textSize="12sp"/>
 
             <LinearLayout
                 android:layout_width="wrap_content"
@@ -215,7 +215,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:textColor="#FFFFFF"
-                    android:textSize="20sp"
+                    android:textSize="18sp"
                     android:textStyle="bold"/>
 
                 <TextView
@@ -223,7 +223,7 @@
                     android:layout_height="wrap_content"
                     android:text="@string/sat_vb_unit"
                     android:textColor="#FFFFFF"
-                    android:textSize="12sp"
+                    android:textSize="11sp"
                     android:alpha="0.7"/>
             </LinearLayout>
         </LinearLayout>

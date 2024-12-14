@@ -5,5 +5,4 @@
     android:updatePeriodMillis="1800000"
     android:initialLayout="@layout/fee_rates_widget"
     android:resizeMode="horizontal"
-    android:widgetCategory="home_screen"
-    android:previewLayout="@layout/fee_rates_widget"/> 
+    android:widgetCategory="home_screen"/>

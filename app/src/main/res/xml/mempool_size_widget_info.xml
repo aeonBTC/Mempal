@@ -5,5 +5,4 @@
     android:updatePeriodMillis="1800000"
     android:initialLayout="@layout/mempool_size_widget"
     android:resizeMode="horizontal"
-    android:widgetCategory="home_screen"
-    android:previewLayout="@layout/mempool_size_widget"/> 
+    android:widgetCategory="home_screen"/>

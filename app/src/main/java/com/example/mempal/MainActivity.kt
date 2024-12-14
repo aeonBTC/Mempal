@@ -16,9 +16,12 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -43,6 +46,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.runtime.*
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.livedata.observeAsState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
@@ -51,10 +55,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.core.content.ContextCompat
@@ -64,7 +66,7 @@ import androidx.lifecycle.lifecycleScope
 import com.example.mempal.api.FeeRates
 import com.example.mempal.api.MempoolInfo
 import com.example.mempal.api.NetworkClient
-import com.example.mempal.api.Result
+import com.example.mempal.cache.DashboardCache
 import com.example.mempal.model.FeeRateType
 import com.example.mempal.model.NotificationSettings
 import com.example.mempal.repository.SettingsRepository
@@ -73,9 +75,9 @@ import com.example.mempal.tor.TorManager
 import com.example.mempal.tor.TorStatus
 import com.example.mempal.ui.theme.AppColors
 import com.example.mempal.ui.theme.MempalTheme
+import com.example.mempal.viewmodel.DashboardUiState
 import com.example.mempal.viewmodel.MainViewModel
 import com.example.mempal.widget.WidgetUpdater
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -140,7 +142,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         val splashScreen = installSplashScreen()
         splashScreen.setKeepOnScreenCondition {
-            viewModel.uiState.value is Result.Loading && !viewModel.hasInitialData
+            false // Don't hold the splash screen, let the app load immediately
         }
 
         super.onCreate(savedInstanceState)
@@ -150,10 +152,14 @@ class MainActivity : ComponentActivity() {
         NetworkClient.initialize(applicationContext)
         settingsRepository = SettingsRepository.getInstance(applicationContext)
 
-        // Fix: Move the NetworkClient initialization check into a proper coroutine scope
+        // Clear the server restart flag on app start
+        settingsRepository.clearServerRestartFlag()
+
+        // Add Tor connection event listener
         lifecycleScope.launch {
-            NetworkClient.isInitialized.collect { isInitialized ->
-                if (isInitialized) {
+            TorManager.getInstance().torConnectionEvent.collect { connected ->
+                if (connected && !viewModel.hasInitialData) {
+                    // Only refresh if we don't have data yet
                     viewModel.refreshData()
                 }
             }
@@ -186,6 +192,16 @@ class MainActivity : ComponentActivity() {
         // Check service state and update settings immediately
         updateServiceState()
 
+        // In onCreate, after the existing NetworkClient initialization
+        lifecycleScope.launch {
+            NetworkClient.isNetworkAvailable.collect { isAvailable ->
+                if (isAvailable && NetworkClient.isInitialized.value) {
+                    // Network is available and client is initialized, refresh data
+                    viewModel.refreshData()
+                }
+            }
+        }
+
         setContent {
             MempalTheme {
                 MainScreen(viewModel)
@@ -197,6 +213,10 @@ class MainActivity : ComponentActivity() {
         super.onResume()
         // Update service state on resume
         updateServiceState()
+
+        // Check and restore Tor connection if needed
+        val torManager = TorManager.getInstance()
+        torManager.checkAndRestoreTorConnection(applicationContext)
 
         // Existing onResume code
         if (!NetworkClient.isInitialized.value) {
@@ -211,6 +231,7 @@ class MainActivity : ComponentActivity() {
             // Only cleanup if activity is actually being destroyed, not recreated
             NetworkClient.cleanup()
             SettingsRepository.cleanup()
+            TorManager.getInstance().cleanup()  // Add this line
             requestPermissionLauncher.unregister()
         }
     }
@@ -243,17 +264,18 @@ private fun MainScreen(viewModel: MainViewModel) {
     val isInitialized by NetworkClient.isInitialized.collectAsState()
     val context = LocalContext.current
 
-    // Effect to handle periodic refresh
-    LaunchedEffect(selectedTab, isInitialized) {
+    // Effect to handle tab changes and periodic refresh
+    LaunchedEffect(selectedTab) {
+        // Notify ViewModel of tab change
+        viewModel.onTabSelected(selectedTab)
+
+        // Only set up periodic refresh for dashboard tab
         if (selectedTab == 0) {
             while (true) {
+                delay(300000) // 5 minute delay between refreshes
                 if (isInitialized) {
                     viewModel.refreshData()
-                } else {
-                    // If NetworkClient is not initialized, try to re-initialize
-                    NetworkClient.initialize(context.applicationContext)
                 }
-                delay(30000) // 30 seconds delay between refreshes
             }
         }
     }
@@ -350,7 +372,7 @@ private fun MainScreen(viewModel: MainViewModel) {
                 0 -> MainContent(
                     viewModel = viewModel,
                     uiState = uiState,
-                    modifier = Modifier.padding(paddingValues)
+                    modifier = Modifier.padding(paddingValues),
                 )
                 1 -> NotificationsScreen(modifier = Modifier.padding(paddingValues))
                 2 -> SettingsScreen(modifier = Modifier.padding(paddingValues))
@@ -374,6 +396,7 @@ private fun AppHeader(onRefresh: () -> Unit) {
 
     val torManager = remember { TorManager.getInstance() }
     val torStatus by torManager.torStatus.collectAsState()
+    val torEnabled = remember(torStatus) { torManager.isTorEnabled() }
 
     Box(
         modifier = Modifier
@@ -390,11 +413,11 @@ private fun AppHeader(onRefresh: () -> Unit) {
         )
 
         // Tor Status Indicator
-        if (torStatus == TorStatus.CONNECTED) {
+        if (torEnabled || torStatus == TorStatus.CONNECTING || torStatus == TorStatus.CONNECTED) {
             Box(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .padding(start = 26.5.dp, bottom = 18.5.dp)
+                    .padding(start = 27.dp, bottom = 18.dp)
             ) {
                 var showTooltip by remember { mutableStateOf(false) }
 
@@ -404,8 +427,13 @@ private fun AppHeader(onRefresh: () -> Unit) {
                 ) {
                     Image(
                         painter = painterResource(id = R.drawable.ic_onion),
-                        contentDescription = "Tor Connected",
-                        modifier = Modifier.size(24.dp)
+                        contentDescription = "Tor Status",
+                        modifier = Modifier
+                            .size(24.dp)
+                            .graphicsLayer(alpha = when (torStatus) {
+                                TorStatus.CONNECTED -> 1f
+                                else -> 0.5f
+                            })
                     )
                 }
 
@@ -421,7 +449,11 @@ private fun AppHeader(onRefresh: () -> Unit) {
                             tonalElevation = 4.dp
                         ) {
                             Text(
-                                text = "Tor Connected",
+                                text = when (torStatus) {
+                                    TorStatus.CONNECTED -> "Tor Connected"
+                                    TorStatus.CONNECTING -> "Tor Connecting..."
+                                    else -> "Tor Enabled"
+                                },
                                 modifier = Modifier.padding(12.dp),
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = Color.White
@@ -433,7 +465,7 @@ private fun AppHeader(onRefresh: () -> Unit) {
         }
 
         IconButton(
-            onClick = {
+            onClick = { 
                 isRotating = true
                 onRefresh()
             },
@@ -459,63 +491,78 @@ private fun AppHeader(onRefresh: () -> Unit) {
 @Composable
 private fun MainContent(
     viewModel: MainViewModel,
-    uiState: Result<Unit>,
+    uiState: DashboardUiState,
     modifier: Modifier = Modifier
 ) {
     val blockHeight by viewModel.blockHeight.observeAsState()
     val blockTimestamp by viewModel.blockTimestamp.observeAsState()
     val feeRates by viewModel.feeRates.observeAsState()
     val mempoolInfo by viewModel.mempoolInfo.observeAsState()
+    val isInitialized = NetworkClient.isInitialized.collectAsState()
+
+    // Determine the appropriate message based on Tor connection and cache state
+    val statusMessage = when {
+        // If Tor is connected and we're loading data
+        isInitialized.value && uiState is DashboardUiState.Loading -> "Fetching data..."
+        
+        // If Tor is not connected
+        !isInitialized.value -> {
+            if (DashboardCache.hasCachedData()) "Reconnecting to Tor network..." else "Connecting to Tor network..."
+        }
+        
+        // For error states
+        uiState is DashboardUiState.Error -> uiState.message
+        
+        // For success states with cache
+        uiState is DashboardUiState.Success && uiState.isCache -> {
+            if (DashboardCache.hasCachedData()) "Reconnecting to Tor network..." else "Connecting to Tor network..."
+        }
+        
+        // No message for other states
+        else -> null
+    }
 
     when (uiState) {
-        is Result.Error -> {
+        is DashboardUiState.Error -> {
             if (!viewModel.hasInitialData) {
-                // Show loading cards if we haven't received any data yet
                 MainContentDisplay(
                     blockHeight = null,
                     blockTimestamp = null,
                     feeRates = null,
                     mempoolInfo = null,
-                    modifier = modifier
+                    modifier = modifier,
+                    viewModel = viewModel,
+                    statusMessage = statusMessage
                 )
             } else {
-                // Show error only if we had data before
                 ErrorDisplay(
-                    message = uiState.message,
+                    message = statusMessage ?: "Unknown error occurred",
                     onRetry = viewModel::refreshData,
                     modifier = modifier
                 )
             }
         }
-        else -> MainContentDisplay(
-            blockHeight = blockHeight,
-            blockTimestamp = blockTimestamp,
-            feeRates = feeRates,
-            mempoolInfo = mempoolInfo,
-            modifier = modifier
-        )
-    }
-}
-
-@Composable
-private fun ErrorDisplay(
-    message: String,
-    onRetry: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier.fillMaxSize(),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text(
-            text = message,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.error
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        Button(onClick = onRetry) {
-            Text("Retry")
+        is DashboardUiState.Success -> {
+            MainContentDisplay(
+                blockHeight = blockHeight,
+                blockTimestamp = blockTimestamp,
+                feeRates = feeRates,
+                mempoolInfo = mempoolInfo,
+                modifier = modifier,
+                viewModel = viewModel,
+                statusMessage = statusMessage
+            )
+        }
+        DashboardUiState.Loading -> {
+            MainContentDisplay(
+                blockHeight = blockHeight,
+                blockTimestamp = blockTimestamp,
+                feeRates = feeRates,
+                mempoolInfo = mempoolInfo,
+                modifier = modifier,
+                viewModel = viewModel,
+                statusMessage = statusMessage
+            )
         }
     }
 }
@@ -526,17 +573,74 @@ private fun MainContentDisplay(
     blockTimestamp: Long?,
     feeRates: FeeRates?,
     mempoolInfo: MempoolInfo?,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    viewModel: MainViewModel? = null,
+    statusMessage: String? = null
 ) {
+    val uiState by viewModel?.uiState?.collectAsState() ?: remember { mutableStateOf<DashboardUiState>(DashboardUiState.Loading) }
+    val isInitialized = NetworkClient.isInitialized.collectAsState()
+    val isMainRefreshing by viewModel?.isMainRefreshing?.collectAsState() ?: remember { mutableStateOf(false) }
+    
+    // Remember the warning tooltip state
+    val warningTooltip = remember(mempoolInfo) {
+        if (mempoolInfo?.isUsingFallbackHistogram == true) {
+            "Your custom server doesn't provide fee distribution data. " +
+            "We're using mempool.space as a fallback source for this information."
+        } else null
+    }
+    
+    // Show spinner for loading states and connection messages
+    val showSpinner = !isInitialized.value || 
+                     uiState is DashboardUiState.Loading || 
+                     statusMessage?.contains("Connecting") == true || 
+                     statusMessage?.contains("Reconnecting") == true ||
+                     statusMessage?.contains("Fetching") == true
+
     Column(
         modifier = modifier
             .fillMaxSize()
             .padding(horizontal = 12.dp)
+            .padding(bottom = 4.dp)
             .verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
+        // Status message at the top
+        if (!statusMessage.isNullOrEmpty()) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = AppColors.DarkerNavy
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (showSpinner) {
+                        CircularProgressIndicator(
+                            modifier = Modifier
+                                .size(16.dp)
+                                .padding(end = 8.dp),
+                            color = AppColors.Orange,
+                            strokeWidth = 2.dp
+                        )
+                    }
+                    Text(
+                        text = statusMessage,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AppColors.DataGray
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+
+        // Existing cards
         DataCard(
-            title = "Current Block Height",
+            title = "Block Height",
             icon = Icons.Default.Numbers,
             content = blockHeight?.let {
                 {
@@ -557,7 +661,9 @@ private fun MainContentDisplay(
                     }
                 }
             },
-            isLoading = blockHeight == null
+            isLoading = blockHeight == null,
+            onRefresh = viewModel?.let { { it.refreshBlockData() } },
+            isMainRefreshing = isMainRefreshing
         )
 
         DataCard(
@@ -580,30 +686,39 @@ private fun MainContentDisplay(
                     }
                 }
             },
-            isLoading = mempoolInfo == null
+            isLoading = mempoolInfo == null,
+            onRefresh = viewModel?.let { { it.refreshMempoolInfo() } },
+            isMainRefreshing = isMainRefreshing
         )
 
         DataCard(
             title = "Fee Rates (sat/vB)",
-            content = if (feeRates != null) { { FeeRatesContent(feeRates) } } else null,
-            icon = Icons.Default.CurrencyBitcoin,
-            tooltip = "This section shows a rough average of recommended fees with varying confirmation times." +
-                    "\n\n*Note: At times a flood of transactions may enter the mempool and drastically push up fee rates. " +
-                    "These floods are often temporary with only a few vMB worth of transactions that clear relatively quickly. " +
-                    "In this scenario be sure to check the 'Fee Distribution' table to see how big the flood is and how quickly it will clear " +
-                    "to ensure you do not overpay fees.",
+            content = feeRates?.let { { FeeRatesContent(it) } },
+            icon = Icons.Default.Timeline,
+            tooltip = "This section shows the average recommended fee rate with estimated confirmation times." +
+                    "\n\nNOTE: The mempool can sometimes experience a flood of transactions, leading to drastically higher fees. " +
+                    "These floods are often only a few vMB and clear quickly. To avoid overpaying fees, use the " +
+                    """"Fee Distribution" table to gauge the size and clearing time of the flood.""",
+            isLoading = feeRates == null,
+            onRefresh = viewModel?.let { { it.refreshFeeRates() } },
+            isMainRefreshing = isMainRefreshing
         )
 
         DataCard(
             title = "Fee Distribution",
-            content = if (mempoolInfo != null) { { HistogramContent(mempoolInfo) } } else null,
+            content = mempoolInfo?.let { { HistogramContent(it) } },
             icon = Icons.Default.BarChart,
-            tooltip = "Fee Distribution shows a detailed breakdown of the mempool, giving you more insight into choosing the correct fee rate. " +
+            tooltip = "This section shows a detailed breakdown of the mempool. Fee ranges are shown on the left and " +
+                    "the cumulative size of transactions on the right" +
                     "\n\nRange Key:" +
-                    "\n-Green will be confirmed in the next block." +
-                    "\n-Yellow might be confirmed in the next block." +
-                    "\n-Red will not be confirmed in the next block." +
-                    "\n\n*Note: Each Bitcoin block confirms about 1.5vMB worth of transactions.",
+                    "\n- Green will confirm in the next block." +
+                    "\n- Yellow might confirm in the next block." +
+                    "\n- Red will not confirm in the next block." +
+                    "\n\nNOTE: Each Bitcoin block confirms about 1.5 vMB worth of transactions.",
+            warningTooltip = warningTooltip,
+            isLoading = mempoolInfo == null,
+            onRefresh = viewModel?.let { { it.refreshMempoolInfo() } },
+            isMainRefreshing = isMainRefreshing
         )
     }
 }
@@ -616,10 +731,35 @@ private fun DataCard(
     value: String? = null,
     content: (@Composable () -> Unit)? = null,
     tooltip: String? = null,
-    isLoading: Boolean = value == null && content == null
+    warningTooltip: String? = null,
+    isLoading: Boolean = value == null && content == null,
+    onRefresh: (() -> Unit)? = null,
+    isMainRefreshing: Boolean = false
 ) {
+    var isRefreshing by remember { mutableStateOf(false) }
+    val rotation by animateFloatAsState(
+        targetValue = if (isRefreshing || isMainRefreshing) 360f else 0f,
+        animationSpec = tween(
+            durationMillis = 500,
+            easing = FastOutSlowInEasing
+        ),
+        finishedListener = { isRefreshing = false },
+        label = ""
+    )
+
     Card(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier
+            .fillMaxWidth()
+            .then(
+                if (onRefresh != null) {
+                    Modifier.clickable {
+                        if (!isLoading && !isRefreshing && !isMainRefreshing) {
+                            isRefreshing = true
+                            onRefresh()
+                        }
+                    }
+                } else Modifier
+            ),
         colors = CardDefaults.cardColors(
             containerColor = AppColors.DarkerNavy
         )
@@ -638,7 +778,9 @@ private fun DataCard(
                     imageVector = icon,
                     contentDescription = null,
                     tint = AppColors.Orange,
-                    modifier = Modifier.size(24.dp)
+                    modifier = Modifier
+                        .size(24.dp)
+                        .graphicsLayer(rotationZ = if (isRefreshing || isMainRefreshing) rotation else 0f)
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Text(
@@ -650,9 +792,25 @@ private fun DataCard(
                     Spacer(modifier = Modifier.width(4.dp))
                     TooltipButton(tooltip = tooltip)
                 }
+                if (warningTooltip != null) {
+                    Spacer(modifier = Modifier.weight(1f))
+                    TooltipButton(
+                        tooltip = warningTooltip,
+                        icon = Icons.Default.Warning,
+                        tint = AppColors.Orange
+                    )
+                }
             }
 
-            if (isLoading) {
+            if (value != null) {
+                Text(
+                    text = value,
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = AppColors.DataGray
+                )
+            } else if (content != null) {
+                content()
+            } else if (isLoading) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -665,23 +823,17 @@ private fun DataCard(
                         strokeWidth = 2.dp
                     )
                 }
-            } else {
-                if (value != null) {
-                    Text(
-                        text = value,
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = AppColors.DataGray
-                    )
-                } else if (content != null) {
-                    content()
-                }
             }
         }
     }
 }
 
 @Composable
-private fun TooltipButton(tooltip: String) {
+private fun TooltipButton(
+    tooltip: String,
+    icon: ImageVector = Icons.Default.Info,
+    tint: Color = MaterialTheme.colorScheme.onSurface
+) {
     var showTooltip by remember { mutableStateOf(false) }
     Box {
         IconButton(
@@ -689,10 +841,10 @@ private fun TooltipButton(tooltip: String) {
             modifier = Modifier.size(34.dp)
         ) {
             Icon(
-                imageVector = Icons.Default.Info,
+                imageVector = icon,
                 contentDescription = "Info",
                 modifier = Modifier.size(22.dp),
-                tint = MaterialTheme.colorScheme.onSurface
+                tint = tint
             )
         }
         if (showTooltip) {
@@ -935,9 +1087,10 @@ private fun NotificationsScreen(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(16.dp)
+            .padding(horizontal = 12.dp)
+            .padding(bottom = 4.dp)
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(24.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(
             text = "Notifications",
@@ -970,14 +1123,14 @@ private fun NotificationsScreen(
             Text(
                 text = if (settings.isServiceEnabled)"Stop Notification Service" else "Start Notification Service",
                 style = MaterialTheme.typography.titleMedium,
-                color = Color.White
+                color = Color.White.copy(alpha = if (settings.isServiceEnabled || isAnyNotificationEnabled) 1f else 0.5f)
             )
         }
 
         // Bitcoin Blocks section
         NotificationSection(
             config = NotificationSectionConfig(
-                title = stringResource(R.string.blocks_title),
+                title = "Blocks",
                 description = "Get notified when blocks are mined.",
                 enabled = settings.blockNotificationsEnabled,
                 frequency = settings.blockCheckFrequency,
@@ -1127,10 +1280,6 @@ private fun NotificationSection(
     newBlockConfig: NewBlockConfig? = null,
     specificBlockConfig: SpecificBlockConfig? = null
 ) {
-    var debouncedBlockHeight by remember { mutableStateOf("") }
-    val scope = rememberCoroutineScope()
-    var debounceJob by remember { mutableStateOf<Job?>(null) }
-
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -1140,10 +1289,9 @@ private fun NotificationSection(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Main header with toggle
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -1166,11 +1314,8 @@ private fun NotificationSection(
             )
 
             if (config.enabled && newBlockConfig != null) {
-                // New Block Notifications Sub-section
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 16.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Row(
@@ -1198,7 +1343,7 @@ private fun NotificationSection(
                                 checkedThumbColor = Color.White,
                                 checkedTrackColor = AppColors.Orange,
                                 checkedBorderColor = AppColors.Orange,
-                                uncheckedThumbColor = AppColors.DataGray,
+                                uncheckedThumbColor = Color.Gray,
                                 uncheckedTrackColor = AppColors.DarkerNavy,
                                 uncheckedBorderColor = Color.Gray
                             )
@@ -1206,23 +1351,12 @@ private fun NotificationSection(
                     }
 
                     if (newBlockConfig.enabled) {
-                        OutlinedTextField(
-                            value = newBlockConfig.frequency.toString(),
+                        NumericTextField(
+                            value = if (newBlockConfig.frequency == 0) "" else newBlockConfig.frequency.toString(),
                             onValueChange = {
-                                it.toIntOrNull()?.let { value ->
-                                    if (value > 0) newBlockConfig.onFrequencyChange(value)
-                                }
+                                newBlockConfig.onFrequencyChange(if (it.isEmpty()) 0 else it.toIntOrNull() ?: 0)
                             },
-                            label = { Text("Check Frequency (minutes)", color = AppColors.DataGray) },
-                            modifier = Modifier.fillMaxWidth(),
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            singleLine = true,
-                            colors = OutlinedTextFieldDefaults.colors(
-                                unfocusedBorderColor = AppColors.DataGray,
-                                focusedBorderColor = AppColors.Orange,
-                                unfocusedTextColor = AppColors.DataGray,
-                                focusedTextColor = AppColors.Orange
-                            )
+                            label = "Check Interval (minutes)"
                         )
                     }
                 }
@@ -1235,9 +1369,7 @@ private fun NotificationSection(
                     )
 
                     Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 16.dp),
+                        modifier = Modifier.fillMaxWidth(),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Row(
@@ -1265,7 +1397,7 @@ private fun NotificationSection(
                                     checkedThumbColor = Color.White,
                                     checkedTrackColor = AppColors.Orange,
                                     checkedBorderColor = AppColors.Orange,
-                                    uncheckedThumbColor = AppColors.DataGray,
+                                    uncheckedThumbColor = Color.Gray,
                                     uncheckedTrackColor = AppColors.DarkerNavy,
                                     uncheckedBorderColor = Color.Gray
                                 )
@@ -1273,51 +1405,33 @@ private fun NotificationSection(
                         }
 
                         if (specificBlockConfig.enabled) {
-                            OutlinedTextField(
+                            var debouncedBlockHeight by remember(specificBlockConfig.targetHeight) {
+                                mutableStateOf(specificBlockConfig.targetHeight?.toString() ?: "")
+                            }
+
+                            NumericTextField(
                                 value = debouncedBlockHeight,
                                 onValueChange = { newValue ->
                                     debouncedBlockHeight = newValue
-                                    if (newValue.isNotEmpty()) {
+                                    if (newValue.isEmpty()) {
+                                        specificBlockConfig.onTargetHeightChange(null)
+                                    } else {
                                         newValue.toIntOrNull()?.let { value ->
                                             if (value > 0) {
-                                                debounceJob?.cancel()
-                                                debounceJob = scope.launch {
-                                                    delay(4000) // 4 second debounce
-                                                    specificBlockConfig.onTargetHeightChange(value)
-                                                }
+                                                specificBlockConfig.onTargetHeightChange(value)
                                             }
                                         }
                                     }
                                 },
-                                label = { Text("Target Block Height", color = AppColors.DataGray) },
-                                modifier = Modifier.fillMaxWidth(),
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                singleLine = true,
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    unfocusedBorderColor = AppColors.DataGray,
-                                    focusedBorderColor = AppColors.Orange,
-                                    unfocusedTextColor = AppColors.DataGray,
-                                    focusedTextColor = AppColors.Orange
-                                )
+                                label = "Target Block Height"
                             )
 
-                            OutlinedTextField(
-                                value = specificBlockConfig.frequency.toString(),
+                            NumericTextField(
+                                value = if (specificBlockConfig.frequency == 0) "" else specificBlockConfig.frequency.toString(),
                                 onValueChange = {
-                                    it.toIntOrNull()?.let { value ->
-                                        if (value > 0) specificBlockConfig.onFrequencyChange(value)
-                                    }
+                                    specificBlockConfig.onFrequencyChange(if (it.isEmpty()) 0 else it.toIntOrNull() ?: 0)
                                 },
-                                label = { Text("Check Frequency (minutes)", color = AppColors.DataGray) },
-                                modifier = Modifier.fillMaxWidth(),
-                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                singleLine = true,
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    unfocusedBorderColor = AppColors.DataGray,
-                                    focusedBorderColor = AppColors.Orange,
-                                    unfocusedTextColor = AppColors.DataGray,
-                                    focusedTextColor = AppColors.Orange
-                                )
+                                label = "Check Interval (minutes)"
                             )
                         }
                     }
@@ -1338,9 +1452,7 @@ private fun MempoolSizeNotificationSection(
     onThresholdChange: (Float) -> Unit,
     onAboveThresholdChange: (Boolean) -> Unit
 ) {
-    var debouncedThreshold by remember { mutableFloatStateOf(threshold) }
-    val scope = rememberCoroutineScope()
-    var debounceJob by remember { mutableStateOf<Job?>(null) }
+    var debouncedThreshold by remember(threshold) { mutableStateOf(if (threshold == 0f) "" else threshold.toString()) }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1351,8 +1463,8 @@ private fun MempoolSizeNotificationSection(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1366,7 +1478,13 @@ private fun MempoolSizeNotificationSection(
                 )
                 Switch(
                     checked = enabled,
-                    onCheckedChange = onEnabledChange
+                    onCheckedChange = onEnabledChange,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = AppColors.Orange,
+                        uncheckedThumbColor = Color.Gray,
+                        uncheckedTrackColor = AppColors.DarkerNavy
+                    )
                 )
             }
             Text(
@@ -1376,21 +1494,23 @@ private fun MempoolSizeNotificationSection(
             )
             if (enabled) {
                 Column(
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     ThresholdToggle(
                         isAboveThreshold = aboveThreshold,
                         onToggleChange = onAboveThresholdChange
                     )
+
                     OutlinedTextField(
-                        value = debouncedThreshold.toString(),
+                        value = debouncedThreshold,
                         onValueChange = { newValue ->
-                            newValue.toFloatOrNull()?.let { value ->
-                                if (value > 0) {
-                                    debouncedThreshold = value
-                                    debounceJob?.cancel()
-                                    debounceJob = scope.launch {
-                                        delay(1000) // 1 second debounce
+                            // Allow empty, digits, and a single decimal point
+                            if (newValue.isEmpty() || newValue.matches(Regex("^\\d*\\.?\\d*$"))) {
+                                debouncedThreshold = newValue
+                                if (newValue.isEmpty()) {
+                                    onThresholdChange(0f)
+                                } else {
+                                    newValue.toFloatOrNull()?.let { value ->
                                         onThresholdChange(value)
                                     }
                                 }
@@ -1398,7 +1518,7 @@ private fun MempoolSizeNotificationSection(
                         },
                         label = { Text("Threshold (vMB)", color = AppColors.DataGray) },
                         modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
                         singleLine = true,
                         colors = OutlinedTextFieldDefaults.colors(
                             unfocusedBorderColor = AppColors.DataGray,
@@ -1407,23 +1527,13 @@ private fun MempoolSizeNotificationSection(
                             focusedTextColor = AppColors.Orange
                         )
                     )
-                    OutlinedTextField(
-                        value = frequency.toString(),
+
+                    NumericTextField(
+                        value = if (frequency == 0) "" else frequency.toString(),
                         onValueChange = {
-                            it.toIntOrNull()?.let { value ->
-                                if (value > 0) onFrequencyChange(value)
-                            }
+                            onFrequencyChange(if (it.isEmpty()) 0 else it.toIntOrNull() ?: 0)
                         },
-                        label = { Text("Check Frequency (minutes)", color = AppColors.DataGray) },
-                        modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = AppColors.DataGray,
-                            focusedBorderColor = AppColors.Orange,
-                            unfocusedTextColor = AppColors.DataGray,
-                            focusedTextColor = AppColors.Orange
-                        )
+                        label = "Check Interval (minutes)"
                     )
                 }
             }
@@ -1445,9 +1555,7 @@ private fun FeeRatesNotificationSection(
     onAboveThresholdChange: (Boolean) -> Unit
 ) {
     var expanded by remember { mutableStateOf(false) }
-    var debouncedThreshold by remember { mutableIntStateOf(threshold) }
-    val scope = rememberCoroutineScope()
-    var debounceJob by remember { mutableStateOf<Job?>(null) }
+    var debouncedThreshold by remember(threshold) { mutableIntStateOf(threshold) }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -1458,8 +1566,8 @@ private fun FeeRatesNotificationSection(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1483,37 +1591,27 @@ private fun FeeRatesNotificationSection(
             )
             if (enabled) {
                 Column(
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     ThresholdToggle(
                         isAboveThreshold = isAboveThreshold,
                         onToggleChange = onAboveThresholdChange
                     )
 
-                    OutlinedTextField(
-                        value = debouncedThreshold.toString(),
+                    NumericTextField(
+                        value = if (debouncedThreshold == 0) "" else debouncedThreshold.toString(),
                         onValueChange = { newValue ->
-                            newValue.toIntOrNull()?.let { value ->
-                                if (value > 0) {
+                            if (newValue.isEmpty()) {
+                                debouncedThreshold = 0
+                                onThresholdChange(0)
+                            } else {
+                                newValue.toIntOrNull()?.let { value ->
                                     debouncedThreshold = value
-                                    debounceJob?.cancel()
-                                    debounceJob = scope.launch {
-                                        delay(1000) // 1 second debounce
-                                        onThresholdChange(value)
-                                    }
+                                    onThresholdChange(value)
                                 }
                             }
                         },
-                        label = { Text("Threshold (sat/vB)", color = AppColors.DataGray) },
-                        modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = AppColors.DataGray,
-                            focusedBorderColor = AppColors.Orange,
-                            unfocusedTextColor = AppColors.DataGray,
-                            focusedTextColor = AppColors.Orange
-                        )
+                        label = "Threshold (sat/vB)"
                     )
 
                     ExposedDropdownMenuBox(
@@ -1523,8 +1621,8 @@ private fun FeeRatesNotificationSection(
                         OutlinedTextField(
                             value = when (selectedFeeRateType) {
                                 FeeRateType.NEXT_BLOCK -> "Next Block"
-                                FeeRateType.TWO_BLOCKS -> "3 Blocks"
-                                FeeRateType.FOUR_BLOCKS -> "6 Blocks"
+                                FeeRateType.THREE_BLOCKS -> "3 Blocks"
+                                FeeRateType.SIX_BLOCKS -> "6 Blocks"
                                 FeeRateType.DAY_BLOCKS -> "1 Day"
                             },
                             label = { Text("Fee Rate", color = AppColors.DataGray) },
@@ -1555,14 +1653,14 @@ private fun FeeRatesNotificationSection(
                             DropdownMenuItem(
                                 text = { Text("3 Blocks") },
                                 onClick = {
-                                    onFeeRateTypeChange(FeeRateType.TWO_BLOCKS)
+                                    onFeeRateTypeChange(FeeRateType.THREE_BLOCKS)
                                     expanded = false
                                 }
                             )
                             DropdownMenuItem(
                                 text = { Text("6 Blocks") },
                                 onClick = {
-                                    onFeeRateTypeChange(FeeRateType.FOUR_BLOCKS)
+                                    onFeeRateTypeChange(FeeRateType.SIX_BLOCKS)
                                     expanded = false
                                 }
                             )
@@ -1576,23 +1674,12 @@ private fun FeeRatesNotificationSection(
                         }
                     }
 
-                    OutlinedTextField(
-                        value = frequency.toString(),
+                    NumericTextField(
+                        value = if (frequency == 0) "" else frequency.toString(),
                         onValueChange = {
-                            it.toIntOrNull()?.let { value ->
-                                if (value > 0) onFrequencyChange(value)
-                            }
+                            onFrequencyChange(if (it.isEmpty()) 0 else it.toIntOrNull() ?: 0)
                         },
-                        label = { Text("Check Frequency (minutes)", color = AppColors.DataGray) },
-                        modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = AppColors.DataGray,
-                            focusedBorderColor = AppColors.Orange,
-                            unfocusedTextColor = AppColors.DataGray,
-                            focusedTextColor = AppColors.Orange
-                        )
+                        label = "Check Interval (minutes)"
                     )
                 }
             }
@@ -1618,8 +1705,8 @@ private fun TransactionConfirmationSection(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -1630,14 +1717,14 @@ private fun TransactionConfirmationSection(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = "Confirmation",
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = AppColors.Orange
-                    )
+                    text = "Confirmation",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = AppColors.Orange
+                )
                     Spacer(modifier = Modifier.width(4.dp))
                     TooltipButton(
-                        tooltip = "Caution: This feature has privacy implications.\nIf you're concerned about privacy, be sure to use the " +
-                                "'Enable Tor' option in settings or connect to your own custom mempool server.",
+                        tooltip = "CAUTION: This feature has privacy implications.\nIf you're concerned about privacy, be sure to use the " +
+                                """"Enable Tor" option in settings or connect to your own custom mempool server.""",
                     )
                 }
                 Switch(
@@ -1646,17 +1733,21 @@ private fun TransactionConfirmationSection(
                 )
             }
             Text(
-                text = "Get notified when your transaction is confirmed.",
+                text = "Get notified when a transaction is confirmed.",
                 style = MaterialTheme.typography.titleMedium,
                 color = AppColors.DataGray
             )
             if (enabled) {
                 Column(
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     OutlinedTextField(
                         value = transactionId,
-                        onValueChange = onTransactionIdChange,
+                        onValueChange = { newValue ->
+                            if (newValue.isEmpty() || newValue.all { it.isLetterOrDigit() }) {
+                                onTransactionIdChange(newValue)
+                            }
+                        },
                         label = { Text("Transaction ID", color = AppColors.DataGray) },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
@@ -1667,23 +1758,12 @@ private fun TransactionConfirmationSection(
                             focusedTextColor = AppColors.Orange
                         )
                     )
-                    OutlinedTextField(
-                        value = frequency.toString(),
+                    NumericTextField(
+                        value = if (frequency == 0) "" else frequency.toString(),
                         onValueChange = {
-                            it.toIntOrNull()?.let { value ->
-                                if (value > 0) onFrequencyChange(value)
-                            }
+                            onFrequencyChange(if (it.isEmpty()) 0 else it.toIntOrNull() ?: 0)
                         },
-                        label = { Text("Check Frequency (minutes)", color = AppColors.DataGray) },
-                        modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = AppColors.DataGray,
-                            focusedBorderColor = AppColors.Orange,
-                            unfocusedTextColor = AppColors.DataGray,
-                            focusedTextColor = AppColors.Orange
-                        )
+                        label = "Check Interval (minutes)"
                     )
                 }
             }
@@ -1699,18 +1779,36 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
     val torStatus by torManager.torStatus.collectAsState()
     var torEnabled by remember { mutableStateOf(torManager.isTorEnabled()) }
     var updateFrequency by remember { mutableLongStateOf(settingsRepository.getUpdateFrequency()) }
-
+    
+    // Track initial values
+    val initialTorEnabled = rememberSaveable { torManager.isTorEnabled() }
+    val initialApiUrl = rememberSaveable { settingsRepository.getApiUrl() }
+    
     var selectedOption by remember {
         mutableIntStateOf(
             if (settingsRepository.getApiUrl() == "https://mempool.space") 0 else 1
         )
     }
-    var customUrl by remember { mutableStateOf(
-        if (settingsRepository.getApiUrl() != "https://mempool.space")
-            settingsRepository.getApiUrl() else ""
-    ) }
+    val initialSelectedOption = rememberSaveable {
+        if (settingsRepository.getApiUrl() == "https://mempool.space") 0 else 1
+    }
+    
+    var customUrl by remember {
+        mutableStateOf(
+            if (settingsRepository.getApiUrl() != "https://mempool.space")
+                settingsRepository.getApiUrl() else ""
+        )
+    }
     var showRestartDialog by remember { mutableStateOf(false) }
     var showUrlError by remember { mutableStateOf(false) }
+    var testResult by remember { mutableStateOf<Boolean?>(null) }
+    var isTestingConnection by remember { mutableStateOf(false) }
+    val savedServers = remember { mutableStateOf(settingsRepository.getSavedServers().toList()) }
+
+    // Check if settings have changed
+    val hasServerSettingsChanged = selectedOption != initialSelectedOption ||
+            (selectedOption == 1 && customUrl != initialApiUrl) ||
+            torEnabled != initialTorEnabled
 
     // URL validation function
     fun isValidUrl(url: String): Boolean {
@@ -1727,7 +1825,7 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
             }
             "https://mempool.space"
         } else {
-            customUrl.trim()
+            customUrl.trim().trimEnd('/')
         }
 
         if (selectedOption == 1) {
@@ -1748,10 +1846,6 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
     }
 
     // Add this function to handle server testing
-    val scope = rememberCoroutineScope()
-    var isTestingConnection by remember { mutableStateOf(false) }
-    var testResult by remember { mutableStateOf<Boolean?>(null) }
-
     suspend fun testServerConnection(url: String): Boolean {
         return try {
             if (url.contains(".onion")) {
@@ -1775,9 +1869,10 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(16.dp)
+            .padding(horizontal = 12.dp)
+            .padding(bottom = 4.dp)
             .verticalScroll(rememberScrollState()),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(
             text = "Settings",
@@ -1809,12 +1904,12 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                         selected = selectedOption == 0,
                         onClick = {
                             selectedOption = 0
-                            customUrl = ""
                             if (torManager.isTorEnabled()) {
                                 torManager.stopTor(context)
                                 torEnabled = false
                             }
-                        }
+                        },
+                        modifier = Modifier.fillMaxWidth()
                     )
 
                     RadioOption(
@@ -1824,99 +1919,210 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                     )
 
                     if (selectedOption == 1) {
-                        OutlinedTextField(
-                            value = customUrl,
-                            onValueChange = {
-                                customUrl = it
-                                showUrlError = false
-                                testResult = null
-                                if (it.contains(".onion")) {
-                                    if (!torEnabled) {
-                                        torEnabled = true
-                                        torManager.startTor(context)
+                        var isDropdownExpanded by remember { mutableStateOf(false) }
+                        
+                        // Function to check if URL is mempool.space
+                        fun isDefaultServer(url: String): Boolean {
+                            val trimmed = url.trim()
+                            return trimmed == "mempool.space" || 
+                                   trimmed == "mempool.space/" ||
+                                   trimmed == "https://mempool.space" || 
+                                   trimmed == "https://mempool.space/"
+                        }
+
+                        ExposedDropdownMenuBox(
+                            expanded = isDropdownExpanded,
+                            onExpandedChange = { newValue -> 
+                                // Only allow auto-collapse, not auto-expand
+                                if (!newValue) isDropdownExpanded = false
+                            },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 10.dp)
+                        ) {
+                            OutlinedTextField(
+                                value = customUrl,
+                                onValueChange = { url ->
+                                    customUrl = url
+                                    showUrlError = isDefaultServer(url)
+                                    testResult = null
+                                    if (url.contains(".onion")) {
+                                        if (!torEnabled) {
+                                            torEnabled = true
+                                            torManager.startTor(context)
+                                        }
+                                    }
+                                },
+                                label = { Text(if (torEnabled) "Onion Address" else "Server Address", color = AppColors.DataGray) },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .menuAnchor(),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = AppColors.Orange,
+                                    unfocusedBorderColor = AppColors.DataGray,
+                                    unfocusedTextColor = AppColors.DataGray,
+                                    focusedTextColor = AppColors.Orange
+                                ),
+                                isError = showUrlError,
+                                supportingText = if (showUrlError) {
+                                    { Text(
+                                        text = if (isDefaultServer(customUrl)) 
+                                            "Use default server option instead" 
+                                        else "URL must start with http:// or https://",
+                                        color = MaterialTheme.colorScheme.error
+                                    ) }
+                                } else null,
+                                trailingIcon = {
+                                    IconButton(onClick = { isDropdownExpanded = !isDropdownExpanded }) {
+                                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = isDropdownExpanded)
                                     }
                                 }
-                            },
-                            label = { Text(if (torEnabled) "Onion Address" else "Address", color = AppColors.DataGray) },
+                            )
+
+                            ExposedDropdownMenu(
+                                expanded = isDropdownExpanded,
+                                onDismissRequest = { isDropdownExpanded = false },
+                                modifier = Modifier.exposedDropdownSize()
+                            ) {
+                                savedServers.value.forEach { serverUrl ->
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    text = if (serverUrl.length > 26)
+                                                        serverUrl.take(26) + "..."
+                                                    else serverUrl,
+                                                    style = MaterialTheme.typography.bodyLarge,
+                                                    color = AppColors.DataGray,
+                                                    modifier = Modifier.weight(1f)
+                                                )
+                                                IconButton(
+                                                    onClick = {
+                                                        settingsRepository.removeSavedServer(serverUrl)
+                                                        savedServers.value = settingsRepository.getSavedServers().toList()
+                                                    },
+                                                    modifier = Modifier.padding(start = 8.dp)
+                                                ) {
+                                                    Icon(
+                                                        imageVector = Icons.Default.Delete,
+                                                        contentDescription = "Delete server",
+                                                        tint = Color(0xFFA00000)  // Brighter Dark Red
+                                                    )
+                                                }
+                                            }
+                                        },
+                                        onClick = {
+                                            customUrl = serverUrl.trimEnd('/')
+                                            if (serverUrl.contains(".onion")) {
+                                                torEnabled = true
+                                                torManager.startTor(context)
+                                            }
+                                            isDropdownExpanded = false
+                                        },
+                                        contentPadding = PaddingValues(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                                        colors = MenuDefaults.itemColors(
+                                            textColor = AppColors.DataGray
+                                        )
+                                    )
+                                }
+
+                                if (savedServers.value.isEmpty()) {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Text(
+                                                text = "No saved servers",
+                                                style = MaterialTheme.typography.bodyLarge,
+                                                color = AppColors.DataGray.copy(alpha = 0.7f)
+                                            )
+                                        },
+                                        onClick = { isDropdownExpanded = false },
+                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                                        colors = MenuDefaults.itemColors(
+                                            textColor = AppColors.DataGray
+                                        )
+                                    )
+                                }
+                            }
+                        }
+                        // Connection status indicator
+                        Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(top = 8.dp),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedBorderColor = AppColors.Orange,
-                                unfocusedBorderColor = AppColors.DataGray
-                            ),
-                            isError = showUrlError
-                        )
-
-                        if (showUrlError) {
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(14.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .background(
+                                        color = when {
+                                            selectedOption == 0 -> Color.Green
+                                            isTestingConnection -> Color.Yellow
+                                            testResult == true -> Color.Green
+                                            testResult == false -> Color.Red
+                                            else -> Color.Gray
+                                        },
+                                        shape = CircleShape
+                                    )
+                            )
                             Text(
-                                text = "URL must start with http:// or https://",
-                                color = MaterialTheme.colorScheme.error,
+                                text = when {
+                                    selectedOption == 0 -> "Connected to mempool.space"
+                                    isTestingConnection -> "Testing connection..."
+                                    testResult == true -> "Connected successfully"
+                                    testResult == false -> "Connection failed"
+                                    else -> "Connection status"
+                                },
                                 style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(start = 16.dp, top = 4.dp)
+                                color = AppColors.DataGray
                             )
                         }
 
-                        // Test Server button and result
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 8.dp)
-                        ) {
-                            Button(
-                                onClick = {
-                                    isTestingConnection = true
-                                    scope.launch {
-                                        testResult = testServerConnection(customUrl)
-                                        isTestingConnection = false
-                                    }
-                                },
-                                enabled = !isTestingConnection && customUrl.isNotEmpty(),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = AppColors.Orange,
-                                    disabledContainerColor = AppColors.Orange.copy(alpha = 0.5f)
-                                ),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                if (isTestingConnection) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(16.dp),
-                                        color = Color.White,
-                                        strokeWidth = 2.dp
-                                    )
-                                } else {
-                                    Text("Test Server")
+                        LaunchedEffect(customUrl, selectedOption, torEnabled, torStatus) {
+                            if (selectedOption == 1 && customUrl.isNotEmpty() && 
+                                (customUrl.startsWith("http://") || customUrl.startsWith("https://"))) {
+                                isTestingConnection = true
+                                // Wait for 2s of no changes before testing
+                                delay(2000)
+                                // If Tor is enabled, wait until it's connected
+                                if (torEnabled && torStatus != TorStatus.CONNECTED) {
+                                    testResult = null
+                                    isTestingConnection = false
+                                    return@LaunchedEffect
                                 }
-                            }
-
-                            if (testResult != null && !isTestingConnection && customUrl.isNotEmpty()) {
-                                Text(
-                                    text = if (testResult == true) "Connection successful" else "Connection failed",
-                                    color = if (testResult == true) Color.Green else Color.Red,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    modifier = Modifier
-                                        .padding(top = 4.dp)
-                                        .fillMaxWidth(),
-                                    textAlign = TextAlign.Center
-                                )
+                                // First attempt
+                                testResult = testServerConnection(customUrl)
+                                // If first attempt fails, wait 1 second1 and try again
+                                if (testResult == false) {
+                                    delay(1000)
+                                    testResult = testServerConnection(customUrl)
+                                }
+                                isTestingConnection = false
                             }
                         }
                     }
+                }
 
-                    // Tor controls
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 24.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column {
-                            Text(
-                                text = "Enable Tor",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = AppColors.DataGray
-                            )
+                // Tor settings section
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column {
+                        Text(
+                            text = "Enable Tor",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = AppColors.DataGray
+                        )
+                        if (torEnabled) {
                             Text(
                                 text = "Status: ${torStatus.name}",
                                 color = when (torStatus) {
@@ -1928,64 +2134,205 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                                 style = MaterialTheme.typography.bodySmall,
                                 modifier = Modifier.padding(top = 4.dp)
                             )
-                            if (torEnabled) {
-                                Text(
-                                    text = "Tor defaults to mempool.space's onion address.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = AppColors.DataGray.copy(alpha = 0.7f),
-                                    modifier = Modifier.padding(top = 2.dp)
-                                )
-                            }
-                        }
-                        Switch(
-                            checked = torEnabled,
-                            onCheckedChange = { enabled ->
-                                if (enabled && customUrl.isNotEmpty() && (!customUrl.startsWith("http://") && !customUrl.startsWith("https://"))) {
-                                    showUrlError = true
-                                    return@Switch
-                                }
-                                torEnabled = enabled
-                                if (enabled) {
-                                    selectedOption = 1
-                                    torManager.startTor(context)
-                                    if (customUrl.isEmpty()) {
-                                        customUrl = "http://mempoolhqx4isw62xs7abwphsq7ldayuidyx2v2oethdhhj6mlo2r6ad.onion/"
-                                    }
-                                } else {
-                                    torManager.stopTor(context)
-                                    customUrl = ""
-                                }
-                            },
-                            enabled = torStatus != TorStatus.CONNECTING,
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color.White,
-                                checkedTrackColor = AppColors.Orange,
-                                uncheckedThumbColor = AppColors.DataGray,
-                                uncheckedTrackColor = AppColors.DarkerNavy,
-                                checkedBorderColor = Color.Gray,
-                                uncheckedBorderColor = Color.Gray
+                            Text(
+                                text = "Tor defaults to mempool.space's onion address.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = AppColors.DataGray.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(top = 2.dp)
                             )
-                        )
+                        }
                     }
+                    Switch(
+                        checked = torEnabled,
+                        onCheckedChange = { enabled ->
+                            if (enabled && customUrl.isNotEmpty() && (!customUrl.startsWith("http://") && !customUrl.startsWith("https://"))) {
+                                showUrlError = true
+                                return@Switch
+                            }
+                            torEnabled = enabled
+                            if (enabled) {
+                                selectedOption = 1
+                                torManager.startTor(context)
+                                if (customUrl.isEmpty() || !customUrl.contains(".onion")) {
+                                    customUrl = "http://mempoolhqx4isw62xs7abwphsq7ldayuidyx2v2oethdhhj6mlo2r6ad.onion"
+                                }
+                            } else {
+                                torManager.stopTor(context)
+                            }
+                        },
+                        enabled = torStatus != TorStatus.CONNECTING,
+                        colors = SwitchDefaults.colors(
+                            checkedThumbColor = Color.White,
+                            checkedTrackColor = AppColors.Orange,
+                            uncheckedThumbColor = Color.Gray,
+                            uncheckedTrackColor = AppColors.DarkerNavy,
+                            checkedBorderColor = AppColors.Orange,
+                            uncheckedBorderColor = Color.Gray
+                        )
+                    )
                 }
 
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Button(
-                        onClick = { handleSave() },
+                        onClick = {
+                            if (selectedOption == 1 && (customUrl.isEmpty() || (!customUrl.startsWith("http://") && !customUrl.startsWith("https://")))) {
+                                showUrlError = true
+                                return@Button
+                            }
+                            if (selectedOption == 1) {
+                                settingsRepository.saveApiUrl(customUrl)
+                                settingsRepository.addSavedServer(customUrl)
+                                savedServers.value = settingsRepository.getSavedServers().toList()
+                            }
+                            handleSave()
+                        },
+                        enabled = hasServerSettingsChanged && 
+                            !(torEnabled && torStatus != TorStatus.CONNECTED), // Disable if Tor is enabled but not connected
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = AppColors.Orange
+                            containerColor = AppColors.Orange,
+                            disabledContainerColor = AppColors.Orange.copy(alpha = 0.5f)
                         ),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text("Save")
+                        Text(
+                            text = if (torEnabled && torStatus != TorStatus.CONNECTED) 
+                                "Waiting for Tor..." 
+                            else 
+                                "Save"
+                        )
                     }
                 }
+            }
+        }
+
+        // Notifications Settings Card
+        Card(
+            colors = CardDefaults.cardColors(
+                containerColor = AppColors.DarkerNavy
+            )
+        ) {
+            Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "Notifications",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = AppColors.Orange
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    TooltipButton(
+                        tooltip = """For instant alerts, use this option to set the notifications "check interval" field to seconds."""
+                    )
+                }
+
+                var expanded by remember { mutableStateOf(false) }
+                val isUsingCustomServer = settingsRepository.getApiUrl() != "https://mempool.space" &&
+                        settingsRepository.getApiUrl() != "http://mempoolhqx4isw62xs7abwphsq7ldayuidyx2v2oethdhhj6mlo2r6ad.onion"
+                val serverRestartComplete = !settingsRepository.needsRestartForServer()
+                val timeUnitEnabled = isUsingCustomServer && serverRestartComplete
+
+                // Force minutes when using default server or before restart
+                val selectedTimeUnit = remember {
+                    if (!timeUnitEnabled) {
+                        settingsRepository.saveNotificationTimeUnit("minutes")
+                        mutableStateOf("minutes")
+                    } else {
+                        mutableStateOf(settingsRepository.getNotificationTimeUnit())
+                    }
+                }
+
+                // Update time unit if server changes or restart status changes
+                LaunchedEffect(timeUnitEnabled) {
+                    if (!timeUnitEnabled) {
+                        selectedTimeUnit.value = "minutes"
+                        settingsRepository.saveNotificationTimeUnit("minutes")
+                    }
+                }
+
+                ExposedDropdownMenuBox(
+                    expanded = expanded,
+                    onExpandedChange = { if (timeUnitEnabled) expanded = !expanded }
+                ) {
+                    OutlinedTextField(
+                        value = when (selectedTimeUnit.value) {
+                            "seconds" -> "Seconds"
+                            else -> "Minutes"
+                        },
+                        onValueChange = {},
+                        readOnly = true,
+                        enabled = timeUnitEnabled,
+                        label = { Text("Check Interval Mode") },
+                        trailingIcon = {
+                            if (timeUnitEnabled) {
+                                ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .menuAnchor()
+                            .padding(top = 16.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = AppColors.Orange,
+                            unfocusedBorderColor = AppColors.DataGray,
+                            focusedLabelColor = AppColors.Orange,
+                            disabledTextColor = AppColors.DataGray.copy(alpha = 0.7f),
+                            disabledBorderColor = AppColors.DataGray.copy(alpha = 0.5f),
+                            disabledLabelColor = AppColors.DataGray.copy(alpha = 0.7f)
+                        )
+                    )
+
+                    if (timeUnitEnabled) {
+                        ExposedDropdownMenu(
+                            expanded = expanded,
+                            onDismissRequest = { expanded = false }
+                        ) {
+                            listOf("minutes", "seconds").forEach { unit ->
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            when (unit) {
+                                                "minutes" -> "Minutes"
+                                                else -> "Seconds"
+                                            }
+                                        )
+                                    },
+                                    onClick = {
+                                        selectedTimeUnit.value = unit
+                                        settingsRepository.saveNotificationTimeUnit(unit)
+                                        expanded = false
+                                    },
+                                    contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Text(
+                    text = if (!isUsingCustomServer) {
+                        "To prevent excessive data requests to mempool.space, " +
+                                "this option is only available while using a custom server."
+                    } else if (!serverRestartComplete) {
+                        "Save a custom server to enable this option."
+                    } else {
+                        when (selectedTimeUnit.value) {
+                            "seconds" -> "Check interval will be expressed in seconds."
+                            else -> "Check interval will be expressed in minutes."
+                        }
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = AppColors.DataGray,
+                    modifier = Modifier.padding(top = 4.dp, start = 12.dp)
+                )
             }
         }
 
@@ -2010,8 +2357,7 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     TooltipButton(
-                        tooltip = "Widgets can be manually updated by tapping them once. " +
-                                "You can also double tap any widget to open the Mempal app."
+                        tooltip = "Any widget can be manually updated by tapping it once. You can also double tap any widget to open the Mempal app."
                     )
                 }
 
@@ -2029,7 +2375,7 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                         },
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("Update Frequency") },
+                        label = { Text("Update Interval") },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                         modifier = Modifier
                             .fillMaxWidth()
@@ -2046,13 +2392,12 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                         expanded = expanded,
                         onDismissRequest = { expanded = false }
                     ) {
-                        listOf(15L, 30L, 60L, 180L).forEach { minutes ->
+                        listOf(5L, 15L, 30L, 60L).forEach { minutes ->
                             DropdownMenuItem(
                                 text = {
                                     Text(
                                         when (minutes) {
                                             60L -> "1 hour"
-                                            180L -> "3 hours"
                                             else -> "$minutes minutes"
                                         }
                                     )
@@ -2072,12 +2417,11 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                 Text(
                     text = when (updateFrequency) {
                         60L -> "Widgets will update every hour."
-                        180L -> "Widgets will update every 3 hours."
                         else -> "Widgets will update every $updateFrequency minutes."
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = AppColors.DataGray,
-                    modifier = Modifier.padding(top = 4.dp, start = 16.dp)
+                    modifier = Modifier.padding(top = 4.dp, start = 12.dp)
                 )
             }
         }
@@ -2088,7 +2432,8 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(bottom = 16.dp),
+                .padding(top = 20.dp)
+                .padding(bottom = 4.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
@@ -2123,7 +2468,7 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                 Text("Restart Required")
             },
             text = {
-                Text("Please restart the app to save your settings.")
+                Text("Please restart the app to save your custom server settings.")
             },
             confirmButton = {
                 TextButton(
@@ -2138,11 +2483,6 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                 ) {
                     Text("Restart Now")
                 }
-            },
-            dismissButton = {
-                TextButton(onClick = { showRestartDialog = false }) {
-                    Text("Later")
-                }
             }
         )
     }
@@ -2152,10 +2492,11 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
 private fun RadioOption(
     text: String,
     selected: Boolean,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .height(40.dp)
             .selectable(selected = selected, onClick = onClick),
@@ -2190,7 +2531,7 @@ private fun ThresholdToggle(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            text = "Notify when",
+            text = "Notify when:",
             style = MaterialTheme.typography.titleMedium,
             color = AppColors.DataGray
         )
@@ -2219,6 +2560,100 @@ private fun ThresholdToggle(
                 text = "Above",
                 color = if (isAboveThreshold) AppColors.Orange else AppColors.DataGray
             )
+        }
+    }
+}
+
+@Composable
+private fun NumericTextField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier
+) {
+    val context = LocalContext.current
+    val settingsRepository = remember { SettingsRepository.getInstance(context) }
+    var fieldValue by remember(value) { mutableStateOf(value) }
+    val timeUnit = settingsRepository.getNotificationTimeUnit()
+    val isCheckIntervalField = label.startsWith("Check Interval")
+
+    // Only apply time unit conversion for check interval fields
+    val displayValue = if (isCheckIntervalField) {
+        if (fieldValue.isNotEmpty()) {
+            fieldValue
+        } else {
+            ""
+        }
+    } else {
+        fieldValue
+    }
+
+    OutlinedTextField(
+        value = displayValue,
+        onValueChange = { newValue ->
+            if (newValue.isEmpty() || newValue.all { char -> char.isDigit() }) {
+                val numericValue = newValue.toIntOrNull() ?: 0
+                if (newValue.isEmpty() || numericValue >= NotificationSettings.MIN_CHECK_FREQUENCY) {
+                    fieldValue = newValue
+                    onValueChange(newValue)
+                }
+            }
+        },
+        label = {
+            Text(
+                if (isCheckIntervalField) {
+                    "Check Interval (${if (timeUnit == "seconds") "seconds" else "minutes"})"
+                } else {
+                    label
+                },
+                color = AppColors.DataGray
+            )
+        },
+        modifier = modifier
+            .fillMaxWidth(),
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        singleLine = true,
+        colors = OutlinedTextFieldDefaults.colors(
+            unfocusedBorderColor = AppColors.DataGray,
+            focusedBorderColor = AppColors.Orange,
+            unfocusedTextColor = AppColors.DataGray,
+            focusedTextColor = AppColors.Orange
+        )
+    )
+}
+
+@Composable
+private fun ErrorDisplay(
+    message: String,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        if (message.contains("Connecting") || message.contains("Reconnecting") || message.contains("Fetching")) {
+            CircularProgressIndicator(
+                color = AppColors.Orange,
+                modifier = Modifier.size(24.dp),
+                strokeWidth = 2.dp
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+        Text(
+            text = message,
+            style = MaterialTheme.typography.bodyLarge,
+            color = if (message.contains("Connecting") || message.contains("Reconnecting") || message.contains("Fetching")) 
+                AppColors.DataGray 
+            else 
+                MaterialTheme.colorScheme.error
+        )
+        if (!message.contains("Connecting") && !message.contains("Reconnecting") && !message.contains("Fetching")) {
+            Spacer(modifier = Modifier.height(16.dp))
+            Button(onClick = onRetry) {
+                Text("Retry")
+            }
         }
     }
 }

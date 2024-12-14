@@ -8,7 +8,7 @@ import android.content.Context
 import android.content.Intent
 import android.widget.RemoteViews
 import com.example.mempal.R
-import com.example.mempal.api.NetworkClient
+import com.example.mempal.api.WidgetNetworkClient
 import kotlinx.coroutines.*
 
 class FeeRatesWidget : AppWidgetProvider() {
@@ -49,19 +49,15 @@ class FeeRatesWidget : AppWidgetProvider() {
         super.onReceive(context, intent)
         if (intent.action == REFRESH_ACTION) {
             if (WidgetUtils.isDoubleTap()) {
+                // Launch app on double tap
                 val launchIntent = WidgetUtils.getLaunchAppIntent(context)
-                try {
-                    launchIntent.send()
-                    return
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
+                launchIntent.send()
+            } else {
+                // Single tap - refresh widget
+                val appWidgetManager = AppWidgetManager.getInstance(context)
+                val thisWidget = ComponentName(context, FeeRatesWidget::class.java)
+                onUpdate(context, appWidgetManager, appWidgetManager.getAppWidgetIds(thisWidget))
             }
-            
-            val appWidgetManager = AppWidgetManager.getInstance(context)
-            val componentName = ComponentName(context, FeeRatesWidget::class.java)
-            val appWidgetIds = appWidgetManager.getAppWidgetIds(componentName)
-            onUpdate(context, appWidgetManager, appWidgetIds)
         }
     }
 
@@ -70,7 +66,8 @@ class FeeRatesWidget : AppWidgetProvider() {
         appWidgetManager: AppWidgetManager,
         appWidgetIds: IntArray
     ) {
-        for (appWidgetId in appWidgetIds) {
+        // Update each widget
+        appWidgetIds.forEach { appWidgetId ->
             updateAppWidget(context, appWidgetManager, appWidgetId)
         }
     }
@@ -81,31 +78,26 @@ class FeeRatesWidget : AppWidgetProvider() {
         appWidgetId: Int
     ) {
         val views = RemoteViews(context.packageName, R.layout.fee_rates_widget)
-        
-        // Set up refresh click action
+
+        // Create refresh intent
         val refreshIntent = Intent(context, FeeRatesWidget::class.java).apply {
             action = REFRESH_ACTION
-            putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
         }
         val refreshPendingIntent = PendingIntent.getBroadcast(
-            context,
-            appWidgetId,
-            refreshIntent,
+            context, 0, refreshIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         views.setOnClickPendingIntent(R.id.widget_layout, refreshPendingIntent)
-        
-        // Initial loading state
-        views.setTextViewText(R.id.priority_fee, "...")
-        views.setTextViewText(R.id.standard_fee, "...")
-        views.setTextViewText(R.id.economy_fee, "...")
-        
+
+        // Set loading state first
+        setLoadingState(views)
         appWidgetManager.updateAppWidget(appWidgetId, views)
 
         // Fetch latest data
         getOrCreateScope().launch {
             try {
-                val response = NetworkClient.mempoolApi.getFeeRates()
+                val mempoolApi = WidgetNetworkClient.getMempoolApi(context)
+                val response = mempoolApi.getFeeRates()
                 if (response.isSuccessful) {
                     response.body()?.let { feeRates ->
                         views.setTextViewText(R.id.priority_fee, "${feeRates.fastestFee}")
@@ -118,5 +110,11 @@ class FeeRatesWidget : AppWidgetProvider() {
                 e.printStackTrace()
             }
         }
+    }
+
+    private fun setLoadingState(views: RemoteViews) {
+        views.setTextViewText(R.id.priority_fee, "...")
+        views.setTextViewText(R.id.standard_fee, "...")
+        views.setTextViewText(R.id.economy_fee, "...")
     }
 } 

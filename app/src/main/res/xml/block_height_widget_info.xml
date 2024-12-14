@@ -5,5 +5,4 @@
     android:updatePeriodMillis="1800000"
     android:initialLayout="@layout/block_height_widget"
     android:resizeMode="horizontal"
-    android:widgetCategory="home_screen"
-    android:previewLayout="@layout/block_height_widget"/> 
+    android:widgetCategory="home_screen"/>
