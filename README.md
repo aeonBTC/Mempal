@@ -1,15 +1,19 @@
 # Mempal
 
 
-![mempal_screens](https://github.com/user-attachments/assets/c0ac55f5-b80a-4067-98bf-0c138cc0d945)
+![screens](https://github.com/user-attachments/assets/83ce0767-5ac9-4867-bdd5-8a7163a0caab)
 
 
 ### Mempal is a Bitcoin monitoring app that allows users to effortlessly track real-time fee rates and mempool depth for smarter transaction and fee management.
 
 Key Features:
 
-- Detailed Mempool Insights: Mempal provides in-depth information about the current state of the Bitcoin mempool, including the size of the mempool, transaction fee levels, and fee distribution. This allows users to gauge network congestion and make informed decisions regarding their transaction fees.
+- **Detailed Mempool Insights:** Mempal provides in-depth information about the current state of the Bitcoin mempool, including current size of the mempool, transaction fee rates, and fee distribution. This allows users to gauge network congestion and make informed decisions regarding transaction fees.
 
-* Customizable Notifications: Users can tailor their notification settings to receive alerts when transaction fees drop below a specified threshold, when a speicfic transaction is confirmed, or when new Bitcoin blocks are mined. These features are particularly useful for users looking to optimize transaction costs.
+* **Real-Time Notifications:** Users can tailor their notification settings to receive alerts when transaction fees drop below a specified threshold, when a specific transaction is confirmed, or when new blocks are mined.
 
-+ Real-Time Updates: Widgets allow users to receive up-to-date information about fees and the mempool, helping them understand the dynamics of transaction processing and fee fluctuations in real-time.
+* **Custom Servers:** Connect to a self hosted mempool server so you don't have to rely on any middlemen to receive information about the Bitcoin network.
+
+* **Tor Integration:** Use Tor to preserve your privacy and easily connect to .onion mempool servers. 
+
+* **Widgets:** Receive up-to-date information about fees, blocks, and mempool size right on your home screen.
