@@ -51,6 +51,9 @@ class SettingsRepository private constructor(context: Context) {
         private const val KEY_TX_CONFIRMATION_FREQUENCY = "tx_confirmation_frequency"
         private const val KEY_TRANSACTION_ID = "transaction_id"
 
+        private const val KEY_VISIBLE_CARDS = "visible_cards"
+        private val DEFAULT_VISIBLE_CARDS = setOf("Block Height", "Mempool Size", "Fee Rates", "Fee Distribution")
+
         fun getInstance(context: Context): SettingsRepository {
             val currentInstance = instance?.get()
             if (currentInstance != null) {
@@ -176,5 +179,13 @@ class SettingsRepository private constructor(context: Context) {
         val currentServers = getSavedServers().toMutableSet()
         currentServers.remove(url)
         prefs.edit().putStringSet(KEY_SAVED_SERVERS, currentServers).apply()
+    }
+
+    fun getVisibleCards(): Set<String> {
+        return prefs.getStringSet(KEY_VISIBLE_CARDS, DEFAULT_VISIBLE_CARDS) ?: DEFAULT_VISIBLE_CARDS
+    }
+
+    fun saveVisibleCards(visibleCards: Set<String>) {
+        prefs.edit().putStringSet(KEY_VISIBLE_CARDS, visibleCards).apply()
     }
 } 

@@ -38,6 +38,7 @@ class TorManager private constructor() {
     private val maxConnectionAttempts = 5
     private val minRetryDelay = 2000L // 2 seconds
     private val maxRetryDelay = 30000L // 30 seconds
+    private val initialConnectionTimeout = 5100L // Initial connection timeout
 
     companion object {
         @Volatile
@@ -58,10 +59,10 @@ class TorManager private constructor() {
         try {
             scope?.cancel()
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-            
+
             val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             prefsRef = WeakReference(prefs)
-            
+
             val dir = File(context.filesDir, "tor")
             if (!dir.exists()) {
                 dir.mkdirs()
@@ -88,7 +89,7 @@ class TorManager private constructor() {
         try {
             shouldBeTorEnabled = true
             _torStatus.value = TorStatus.CONNECTING
-            
+
             val intent = Intent(context, TorService::class.java).apply {
                 action = ACTION_START
                 putExtra("directory", dataDir?.absolutePath)
@@ -100,15 +101,15 @@ class TorManager private constructor() {
                 var currentDelay = minRetryDelay
                 connectionAttempts = 0
 
-                while (isActive && connectionAttempts < maxConnectionAttempts) {
+                while (isActive) {
                     if (connectionAttempts > 0) {
                         delay(currentDelay)
                         // Exponential backoff with max delay cap
                         currentDelay = (currentDelay * 1.5).toLong().coerceAtMost(maxRetryDelay)
                     } else {
-                        delay(5100) // Initial delay for first attempt
+                        delay(initialConnectionTimeout)
                     }
-                    
+
                     try {
                         withContext(Dispatchers.IO) {
                             val socket = java.net.Socket()
@@ -117,7 +118,6 @@ class TorManager private constructor() {
                                 socket.close()
                                 _torStatus.value = TorStatus.CONNECTED
                                 _proxyReady.value = true
-                                prefsRef?.get()?.edit()?.putBoolean(KEY_TOR_ENABLED, true)?.apply()
                                 emitConnectionEvent(true)
                                 connectionAttempts = 0 // Reset attempts on success
                                 lastConnectionAttempt = System.currentTimeMillis()
@@ -131,8 +131,10 @@ class TorManager private constructor() {
                     } catch (_: Exception) {
                         connectionAttempts++
                         if (connectionAttempts >= maxConnectionAttempts) {
-                            _torStatus.value = TorStatus.ERROR
-                            _proxyReady.value = false
+                            // Instead of moving to ERROR state, stay in CONNECTING
+                            // This allows the UI to keep showing "Reconnecting to Tor network..."
+                            connectionAttempts = 0 // Reset attempts to allow continuous retry
+                            currentDelay = maxRetryDelay // Use max delay for subsequent attempts
                             emitConnectionEvent(false)
                         }
                     }
@@ -149,20 +151,19 @@ class TorManager private constructor() {
     fun stopTor(context: Context) {
         try {
             shouldBeTorEnabled = false
-            
+
             connectionJob?.cancel()
             connectionJob = null
-            
+
             val intent = Intent(context, TorService::class.java).apply {
                 action = ACTION_STOP
             }
             context.stopService(intent)
-            
+
             stopForegroundService(context)
-            
+
             _torStatus.value = TorStatus.DISCONNECTED
             _proxyReady.value = false
-            prefsRef?.get()?.edit()?.putBoolean(KEY_TOR_ENABLED, false)?.apply()
         } catch (e: Exception) {
             _torStatus.value = TorStatus.ERROR
             e.printStackTrace()
@@ -238,5 +239,9 @@ class TorManager private constructor() {
         connectionJob = null
         scope?.cancel()
         scope = null
+    }
+
+    fun saveTorState(enabled: Boolean) {
+        prefsRef?.get()?.edit()?.putBoolean(KEY_TOR_ENABLED, enabled)?.apply()
     }
 }

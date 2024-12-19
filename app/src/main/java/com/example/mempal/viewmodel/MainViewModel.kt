@@ -10,13 +10,13 @@ import com.example.mempal.api.MempoolInfo
 import com.example.mempal.api.NetworkClient
 import com.example.mempal.cache.DashboardCache
 import com.example.mempal.tor.TorManager
+import com.example.mempal.tor.TorStatus
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import retrofit2.Response
-import java.io.IOException
 
 sealed class DashboardUiState {
     object Loading : DashboardUiState()
@@ -54,6 +54,8 @@ class MainViewModel : ViewModel() {
     // Track which tabs have been loaded
     private var dashboardLoaded = false
 
+    private var serverNeedsFallback = false
+
     init {
         // Check if we have cached data immediately
         if (DashboardCache.hasCachedData()) {
@@ -62,10 +64,18 @@ class MainViewModel : ViewModel() {
             _blockTimestamp.value = cachedState.blockTimestamp
             _feeRates.value = cachedState.feeRates
             _mempoolInfo.value = cachedState.mempoolInfo
-            // Don't set success state if we're not initialized, show reconnecting instead
-            if (!NetworkClient.isInitialized.value) {
+            
+            // Set initial state based on Tor status if using Tor
+            if (TorManager.getInstance().isTorEnabled()) {
+                val message = if (DashboardCache.hasCachedData()) {
+                    "Reconnecting to Tor network..."
+                } else {
+                    "Connecting to Tor network..."
+                }
+                _uiState.value = DashboardUiState.Error(message = message, isReconnecting = true)
+            } else if (!NetworkClient.isInitialized.value) {
                 _uiState.value = DashboardUiState.Error(
-                    message = "Reconnecting to Tor network...",
+                    message = "Connecting to server...",
                     isReconnecting = true
                 )
             } else {
@@ -78,12 +88,14 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch {
             NetworkClient.isInitialized.collect { initialized ->
                 if (initialized) {
-                    // Clear any error state before refreshing
-                    if (_uiState.value is DashboardUiState.Error) {
+                    // Only refresh if we're not waiting for Tor
+                    val torManager = TorManager.getInstance()
+                    val torStatus = torManager.torStatus.value
+                    if (!torManager.isTorEnabled() || torStatus == TorStatus.CONNECTED) {
                         _uiState.value = DashboardUiState.Loading
+                        refreshDashboardData()
+                        dashboardLoaded = true
                     }
-                    refreshDashboardData()
-                    dashboardLoaded = true
                 } else {
                     // Reset dashboard loaded state when network is not initialized
                     dashboardLoaded = false
@@ -93,21 +105,39 @@ class MainViewModel : ViewModel() {
 
         // Monitor Tor connection state
         viewModelScope.launch {
-            TorManager.getInstance().torConnectionEvent.collect { connected ->
-                if (connected) {
-                    // When Tor connects, show loading and refresh data
-                    _uiState.value = DashboardUiState.Loading
-                    refreshDashboardData()
-                } else {
-                    // Check if we have cache to determine if we're reconnecting
-                    val isReconnecting = DashboardCache.hasCachedData()
-                    val message = if (isReconnecting) "Reconnecting to Tor network..." else "Connecting to Tor network..."
-                    _uiState.value = DashboardUiState.Error(message = message, isReconnecting = isReconnecting)
+            TorManager.getInstance().torStatus.collect { status ->
+                when (status) {
+                    TorStatus.CONNECTED -> {
+                        // When Tor connects, show loading and refresh data
+                        _uiState.value = DashboardUiState.Loading
+                        refreshDashboardData()
+                    }
+                    TorStatus.CONNECTING -> {
+                        // Show connecting message
+                        val message = if (DashboardCache.hasCachedData()) {
+                            "Reconnecting to Tor network..."
+                        } else {
+                            "Connecting to Tor network..."
+                        }
+                        _uiState.value = DashboardUiState.Error(message = message, isReconnecting = true)
+                    }
+                    else -> {
+                        if (TorManager.getInstance().isTorEnabled()) {
+                            // Only show Tor-related messages if Tor is enabled
+                            val message = if (DashboardCache.hasCachedData()) {
+                                "Reconnecting to Tor network..."
+                            } else {
+                                "Connecting to Tor network..."
+                            }
+                            _uiState.value = DashboardUiState.Error(message = message, isReconnecting = true)
+                        }
+                    }
                 }
             }
         }
     }
 
+    // Function to handle tab changes
     // Function to handle tab changes
     fun onTabSelected(tab: Int) {
         when (tab) {
@@ -121,18 +151,19 @@ class MainViewModel : ViewModel() {
     // Load dashboard data only
     private fun refreshDashboardData() {
         if (!NetworkClient.isInitialized.value) {
-            val isReconnecting = DashboardCache.hasCachedData()
-            val message = if (isReconnecting) "Reconnecting to Tor network..." else "Connecting to Tor network..."
-            _uiState.value = DashboardUiState.Error(message = message, isReconnecting = isReconnecting)
+            val torManager = TorManager.getInstance()
+            if (torManager.isTorEnabled()) {
+                val message = if (DashboardCache.hasCachedData()) {
+                    "Reconnecting to Tor network..."
+                } else {
+                    "Connecting to Tor network..."
+                }
+                _uiState.value = DashboardUiState.Error(message = message, isReconnecting = true)
+            }
             return
         }
 
         viewModelScope.launch {
-            // Show loading state if we're reconnecting or don't have initial data
-            if (!hasInitialData || _uiState.value is DashboardUiState.Error) {
-                _uiState.value = DashboardUiState.Loading
-            }
-
             try {
                 println("Starting parallel API calls...")
 
@@ -171,7 +202,7 @@ class MainViewModel : ViewModel() {
             } catch (e: Exception) {
                 println("Error refreshing data: ${e.message}")
                 e.printStackTrace()
-                handleError(e)
+                handleError()
             }
         }
     }
@@ -223,7 +254,9 @@ class MainViewModel : ViewModel() {
             hasAnySuccessfulResponse = true
 
             // Update mempool info immediately for size display
-            _mempoolInfo.value = mempoolInfo
+            if (!serverNeedsFallback) {
+                _mempoolInfo.value = mempoolInfo
+            }
 
             // Save state immediately with current mempool info
             DashboardCache.saveState(
@@ -234,7 +267,10 @@ class MainViewModel : ViewModel() {
             )
 
             // Check if mempool info needs fallback for fee distribution
-            if (mempoolInfo != null && mempoolInfo.needsHistogramFallback()) {
+            if (mempoolInfo != null && (mempoolInfo.needsHistogramFallback() || serverNeedsFallback)) {
+                // Remember that this server needs fallback for future refreshes
+                serverNeedsFallback = true
+                
                 viewModelScope.launch {
                     try {
                         val fallbackClient = NetworkClient.createTestClient(MempoolApi.BASE_URL)
@@ -242,7 +278,11 @@ class MainViewModel : ViewModel() {
                         if (fallbackResponse.isSuccessful && fallbackResponse.body() != null) {
                             val fallbackInfo = fallbackResponse.body()!!
                             if (!fallbackInfo.needsHistogramFallback()) {
-                                _mempoolInfo.value = mempoolInfo.withFallbackHistogram(fallbackInfo.feeHistogram)
+                                // Update with size from current server but histogram from fallback
+                                _mempoolInfo.value = mempoolInfo.copy(
+                                    feeHistogram = fallbackInfo.feeHistogram,
+                                    isUsingFallbackHistogram = true
+                                )
                                 // Update cache with fallback data
                                 DashboardCache.saveState(
                                     blockHeight = _blockHeight.value,
@@ -278,13 +318,13 @@ class MainViewModel : ViewModel() {
                     _uiState.value = DashboardUiState.Success(isCache = true)
                 }
             } else {
-                handleError(Exception("No API calls were successful"))
+                handleError()
             }
             _isMainRefreshing.value = false
         }
     }
 
-    private fun handleError(e: Exception) {
+    private fun handleError() {
         // If we have cached data, use it instead of showing an error
         if (DashboardCache.hasCachedData()) {
             val cachedState = DashboardCache.getCachedState()
@@ -293,12 +333,15 @@ class MainViewModel : ViewModel() {
             _feeRates.value = cachedState.feeRates
             _mempoolInfo.value = cachedState.mempoolInfo
             
-            _uiState.value = DashboardUiState.Success(isCache = true)
-        } else {
-            val message = when (e) {
-                is IOException -> "Connecting to Tor network..."
-                else -> e.message ?: "Unknown error occurred"
+            // Show appropriate message based on server type
+            val message = if (NetworkClient.isUsingOnion()) {
+                "Reconnecting to Tor network..."
+            } else {
+                "Fetching data..."
             }
+            _uiState.value = DashboardUiState.Error(message = message, isReconnecting = true)
+        } else {
+            val message = "Connection failed. Check server settings."
             _uiState.value = DashboardUiState.Error(message = message, isReconnecting = false)
         }
         _isMainRefreshing.value = false
@@ -311,100 +354,33 @@ class MainViewModel : ViewModel() {
     }
 
     // Individual refresh functions for each card
-    fun refreshBlockData() {
-        if (!NetworkClient.isInitialized.value) {
-            val isReconnecting = DashboardCache.hasCachedData()
-            val message = if (isReconnecting) "Reconnecting to Tor network..." else "Connecting to Tor network..."
-            _uiState.value = DashboardUiState.Error(message = message, isReconnecting = isReconnecting)
-            return
-        }
-        viewModelScope.launch {
-            try {
-                val blockHeightResponse = NetworkClient.mempoolApi.getBlockHeight()
-                val blockHashResponse = NetworkClient.mempoolApi.getLatestBlockHash()
-                
-                if (blockHeightResponse.isSuccessful) {
-                    _blockHeight.value = blockHeightResponse.body()
-                }
-
-                if (blockHashResponse.isSuccessful) {
-                    blockHashResponse.body()?.let { hash ->
-                        val blockInfoResponse = NetworkClient.mempoolApi.getBlockInfo(hash)
-                        if (blockInfoResponse.isSuccessful) {
-                            _blockTimestamp.value = blockInfoResponse.body()?.timestamp
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                handleError(e)
-            }
-        }
-    }
-
-    fun refreshFeeRates() {
-        if (!NetworkClient.isInitialized.value) {
-            val isReconnecting = DashboardCache.hasCachedData()
-            val message = if (isReconnecting) "Reconnecting to Tor network..." else "Connecting to Tor network..."
-            _uiState.value = DashboardUiState.Error(message = message, isReconnecting = isReconnecting)
-            return
-        }
-        viewModelScope.launch {
-            try {
-                val response = NetworkClient.mempoolApi.getFeeRates()
-                if (response.isSuccessful) {
-                    _feeRates.value = response.body()
-                }
-            } catch (e: Exception) {
-                handleError(e)
-            }
-        }
-    }
-
     fun refreshMempoolInfo() {
-        if (!NetworkClient.isInitialized.value) {
-            val isReconnecting = DashboardCache.hasCachedData()
-            val message = if (isReconnecting) "Reconnecting to Tor network..." else "Connecting to Tor network..."
-            _uiState.value = DashboardUiState.Error(message = message, isReconnecting = isReconnecting)
-            return
-        }
         viewModelScope.launch {
             try {
-                // Try primary server first
-                val response = NetworkClient.mempoolApi.getMempoolInfo()
-                var mempoolInfo = response.body()
-                
-                // Check if we need histogram fallback
-                if (response.isSuccessful && mempoolInfo != null && mempoolInfo.needsHistogramFallback()) {
-                    try {
-                        println("Primary server missing histogram data, trying fallback...")
+                val mempoolInfoResponse = NetworkClient.mempoolApi.getMempoolInfo()
+                if (mempoolInfoResponse.isSuccessful) {
+                    val mempoolInfo = mempoolInfoResponse.body()
+
+                    // If the server doesn't provide fee histogram, get it from mempool.space
+                    if (mempoolInfo != null && mempoolInfo.feeHistogram.isEmpty()) {
                         val fallbackClient = NetworkClient.createTestClient(MempoolApi.BASE_URL)
                         val fallbackResponse = fallbackClient.getMempoolInfo()
-                        
                         if (fallbackResponse.isSuccessful && fallbackResponse.body() != null) {
                             val fallbackInfo = fallbackResponse.body()!!
-                            if (!fallbackInfo.needsHistogramFallback()) {
-                                println("Got histogram data from fallback server")
-                                // Keep original data but use fallback histogram
-                                _mempoolInfo.value = mempoolInfo.withFallbackHistogram(fallbackInfo.feeHistogram)
+                            if (!fallbackInfo.feeHistogram.isEmpty()) {
+                                _mempoolInfo.value = mempoolInfo.copy(
+                                    feeHistogram = fallbackInfo.feeHistogram,
+                                    isUsingFallbackHistogram = true
+                                )
                                 return@launch
                             }
                         }
-                    } catch (e: Exception) {
-                        println("Fallback server failed: ${e.message}")
                     }
-                }
-                
-                // If we get here, either:
-                // 1. Primary server succeeded with histogram data
-                // 2. Primary server succeeded without histogram but fallback failed
-                // 3. Primary server failed
-                if (response.isSuccessful && mempoolInfo != null) {
+
                     _mempoolInfo.value = mempoolInfo
-                } else {
-                    handleError(IOException("Failed to fetch mempool info"))
                 }
             } catch (e: Exception) {
-                handleError(e)
+                println("Error fetching mempool info: ${e.message}")
             }
         }
     }

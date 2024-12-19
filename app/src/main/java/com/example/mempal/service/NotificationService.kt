@@ -83,9 +83,9 @@ class NotificationService : Service() {
                 val delayMultiplier = if (timeUnit == "seconds") 1000L else 60000L
                 android.util.Log.d(TAG, "Time unit: $timeUnit, Delay multiplier: $delayMultiplier")
 
-                if (settings.newBlockNotificationEnabled) {
+                // New Block Notifications - requires frequency > 0
+                if (settings.newBlockNotificationEnabled && settings.newBlockCheckFrequency > 0) {
                     monitoringJobs["newBlock"] = launch {
-                        // Initial delay before first check
                         delay(settings.newBlockCheckFrequency * delayMultiplier)
                         while (isActive) {
                             val now = System.currentTimeMillis()
@@ -102,9 +102,11 @@ class NotificationService : Service() {
                     }
                 }
 
-                if (settings.specificBlockNotificationEnabled) {
+                // Specific Block Notifications - requires target height and frequency > 0
+                if (settings.specificBlockNotificationEnabled && 
+                    settings.specificBlockCheckFrequency > 0 && 
+                    settings.targetBlockHeight != null) {
                     monitoringJobs["specificBlock"] = launch {
-                        // Initial delay before first check
                         delay(settings.specificBlockCheckFrequency * delayMultiplier)
                         while (isActive) {
                             val now = System.currentTimeMillis()
@@ -121,9 +123,11 @@ class NotificationService : Service() {
                     }
                 }
 
-                if (settings.mempoolSizeNotificationsEnabled) {
+                // Mempool Size Notifications - requires threshold > 0 and frequency > 0
+                if (settings.mempoolSizeNotificationsEnabled && 
+                    settings.mempoolCheckFrequency > 0 && 
+                    settings.mempoolSizeThreshold > 0) {
                     monitoringJobs["mempoolSize"] = launch {
-                        // Initial delay before first check
                         delay(settings.mempoolCheckFrequency * delayMultiplier)
                         while (isActive) {
                             val now = System.currentTimeMillis()
@@ -140,9 +144,11 @@ class NotificationService : Service() {
                     }
                 }
 
-                if (settings.feeRatesNotificationsEnabled) {
+                // Fee Rate Notifications - requires threshold > 0 and frequency > 0
+                if (settings.feeRatesNotificationsEnabled && 
+                    settings.feeRatesCheckFrequency > 0 && 
+                    settings.feeRateThreshold > 0) {
                     monitoringJobs["feeRates"] = launch {
-                        // Initial delay before first check
                         delay(settings.feeRatesCheckFrequency * delayMultiplier)
                         while (isActive) {
                             val now = System.currentTimeMillis()
@@ -159,9 +165,12 @@ class NotificationService : Service() {
                     }
                 }
 
-                if (settings.txConfirmationEnabled && settings.transactionId.isNotEmpty()) {
+                // Transaction Confirmation Notifications - requires valid txid and frequency > 0
+                if (settings.txConfirmationEnabled && 
+                    settings.txConfirmationFrequency > 0 && 
+                    settings.transactionId.isNotEmpty() && 
+                    settings.transactionId.length >= 64) {  // Valid txid is 64 chars
                     monitoringJobs["txConfirmation"] = launch {
-                        // Initial delay before first check
                         delay(settings.txConfirmationFrequency * delayMultiplier)
                         while (isActive) {
                             val now = System.currentTimeMillis()

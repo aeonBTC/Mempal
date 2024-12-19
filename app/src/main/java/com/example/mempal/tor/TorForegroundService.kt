@@ -40,7 +40,7 @@ class TorForegroundService : Service() {
         return NotificationCompat.Builder(this, NotificationService.CHANNEL_ID)
             .setContentTitle("Mempal")
             .setContentText("Monitoring Bitcoin Network")
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_cube)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setVisibility(NotificationCompat.VISIBILITY_SECRET)
             .build()

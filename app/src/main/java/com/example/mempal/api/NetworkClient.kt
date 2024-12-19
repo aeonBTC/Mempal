@@ -20,7 +20,9 @@ import java.lang.ref.WeakReference
 import java.util.concurrent.TimeUnit
 
 object NetworkClient {
-    private const val TIMEOUT_SECONDS = 30L
+    private const val TIMEOUT_SECONDS = 25L
+    private const val TEST_TIMEOUT_SECONDS = 15L
+    private const val ONION_TEST_TIMEOUT_SECONDS = 45L
     private var retrofit: Retrofit? = null
     private var contextRef: WeakReference<Context>? = null
     private val _isInitialized = MutableStateFlow(false)
@@ -35,16 +37,16 @@ object NetworkClient {
             super.onAvailable(network)
             coroutineScope?.launch {
                 _isNetworkAvailable.value = true
-                if (_isInitialized.value) {
-                    // Reinitialize the client when network becomes available
-                    setupRetrofit(TorManager.getInstance().torStatus.value == TorStatus.CONNECTED)
-                }
+                // Always try to reinitialize when network becomes available
+                setupRetrofit(TorManager.getInstance().torStatus.value == TorStatus.CONNECTED)
+                _isInitialized.value = true
             }
         }
 
         override fun onLost(network: Network) {
             super.onLost(network)
             _isNetworkAvailable.value = false
+            _isInitialized.value = false
         }
     }
 
@@ -71,7 +73,20 @@ object NetworkClient {
         // Check initial network state
         _isNetworkAvailable.value = isNetworkCurrentlyAvailable()
 
+        // Check if current API URL is an onion address and manage Tor accordingly
+        val settingsRepository = SettingsRepository.getInstance(context)
+        val currentApiUrl = settingsRepository.getApiUrl()
         val torManager = TorManager.getInstance()
+        
+        if (currentApiUrl.contains(".onion")) {
+            if (!torManager.isTorEnabled()) {
+                println("Onion address detected, enabling Tor")
+                torManager.startTor(context)
+            }
+        } else if (torManager.isTorEnabled()) {
+            println("Non-onion address detected, disabling Tor")
+            torManager.stopTor(context)
+        }
 
         coroutineScope?.launch {
             torManager.torStatus.collect { status ->
@@ -82,7 +97,11 @@ object NetworkClient {
                         setupRetrofit(status == TorStatus.CONNECTED)
                         _isInitialized.value = true
                         println("NetworkClient initialization complete")
+                    } else {
+                        _isInitialized.value = false
                     }
+                } else {
+                    _isInitialized.value = false
                 }
             }
         }
@@ -146,9 +165,9 @@ object NetworkClient {
     fun createTestClient(baseUrl: String, useTor: Boolean = false): MempoolApi {
         val clientBuilder = OkHttpClient.Builder()
             .addInterceptor(loggingInterceptor)
-            .connectTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .readTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .writeTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .connectTimeout(if (useTor && baseUrl.contains(".onion")) ONION_TEST_TIMEOUT_SECONDS else TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .readTimeout(if (useTor && baseUrl.contains(".onion")) ONION_TEST_TIMEOUT_SECONDS else TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .writeTimeout(if (useTor && baseUrl.contains(".onion")) ONION_TEST_TIMEOUT_SECONDS else TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS)
 
         if (useTor && baseUrl.contains(".onion")) {
             clientBuilder.proxy(java.net.Proxy(
@@ -166,5 +185,9 @@ object NetworkClient {
             .build()
 
         return testRetrofit.create(MempoolApi::class.java)
+    }
+
+    fun isUsingOnion(): Boolean {
+        return mempoolApi.toString().contains(".onion")
     }
 }
