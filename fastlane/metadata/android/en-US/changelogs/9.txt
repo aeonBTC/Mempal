@@ -1,0 +1,4 @@
+- Added dashboard customization to settings.
+- Removed dashboard refresh button.
+	To refresh simply tap anywhere on the dashboard.
+- Various bug fixes and optimizations

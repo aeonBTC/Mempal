@@ -1,0 +1,1 @@
+- Fixed issues with app crashing when enabling Tor.
