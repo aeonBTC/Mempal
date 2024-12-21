@@ -20,9 +20,10 @@ import java.lang.ref.WeakReference
 import java.util.concurrent.TimeUnit
 
 object NetworkClient {
-    private const val TIMEOUT_SECONDS = 30L
-    private const val TEST_TIMEOUT_SECONDS = 20L
-    private const val ONION_TEST_TIMEOUT_SECONDS = 60L
+    private const val TIMEOUT_SECONDS = 15L
+    private const val TEST_TIMEOUT_SECONDS = 10L
+    private const val ONION_TEST_TIMEOUT_SECONDS = 45L
+    private const val TOR_TIMEOUT_SECONDS = 30L
     private var retrofit: Retrofit? = null
     private var contextRef: WeakReference<Context>? = null
     private val _isInitialized = MutableStateFlow(false)
@@ -32,7 +33,7 @@ object NetworkClient {
     private val _isNetworkAvailable = MutableStateFlow(false)
     val isNetworkAvailable: StateFlow<Boolean> = _isNetworkAvailable
     private var lastInitAttempt = 0L
-    private val minInitRetryDelay = 2000L
+    private val minInitRetryDelay = 1000L
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
@@ -40,16 +41,15 @@ object NetworkClient {
             coroutineScope?.launch {
                 _isNetworkAvailable.value = true
                 
-                // Add delay before reinitializing to prevent rapid retries
-                val now = System.currentTimeMillis()
-                if (now - lastInitAttempt < minInitRetryDelay) {
-                    delay(minInitRetryDelay)
-                }
-                lastInitAttempt = now
-                
-                // Check Tor status before initializing
+                // Only add delay for Tor connections
                 val torManager = TorManager.getInstance()
                 if (torManager.isTorEnabled()) {
+                    val now = System.currentTimeMillis()
+                    if (now - lastInitAttempt < minInitRetryDelay) {
+                        delay(minInitRetryDelay)
+                    }
+                    lastInitAttempt = now
+                    
                     if (torManager.torStatus.value == TorStatus.CONNECTED) {
                         setupRetrofit(true)
                         _isInitialized.value = true
@@ -158,16 +158,22 @@ object NetworkClient {
 
         println("Setting up Retrofit with baseUrl: $baseUrl")
 
+        val isOnion = baseUrl.contains(".onion")
+        val timeoutSeconds = when {
+            useProxy && isOnion -> TOR_TIMEOUT_SECONDS
+            else -> TIMEOUT_SECONDS
+        }
+
         val clientBuilder = OkHttpClient.Builder()
             .addInterceptor(loggingInterceptor)
-            .connectTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .readTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            .writeTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .connectTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .readTimeout(timeoutSeconds, TimeUnit.SECONDS)
+            .writeTimeout(timeoutSeconds, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
             .addInterceptor { chain ->
                 var attempt = 0
                 var response = chain.proceed(chain.request())
-                while (!response.isSuccessful && attempt < 3) {
+                while (!response.isSuccessful && attempt < 2) {
                     attempt++
                     response.close()
                     response = chain.proceed(chain.request())
@@ -175,7 +181,7 @@ object NetworkClient {
                 response
             }
 
-        if (useProxy && baseUrl.contains(".onion")) {
+        if (useProxy && isOnion) {
             println("Setting up Tor proxy")
             clientBuilder.proxy(java.net.Proxy(
                 java.net.Proxy.Type.SOCKS,
