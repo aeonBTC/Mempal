@@ -15,6 +15,7 @@ class FeeRatesWidget : AppWidgetProvider() {
     companion object {
         const val REFRESH_ACTION = "com.example.mempal.REFRESH_FEE_RATES_WIDGET"
         private var widgetScope: CoroutineScope? = null
+        private var activeJobs = mutableMapOf<Int, Job>()
     }
 
     private fun getOrCreateScope(): CoroutineScope {
@@ -40,6 +41,8 @@ class FeeRatesWidget : AppWidgetProvider() {
             appWidgetManager.getAppWidgetIds(mempoolSizeWidget).isEmpty()) {
             WidgetUpdater.cancelUpdates(context)
             // Cancel any ongoing coroutines
+            activeJobs.values.forEach { it.cancel() }
+            activeJobs.clear()
             widgetScope?.cancel()
             widgetScope = null
         }
@@ -89,25 +92,47 @@ class FeeRatesWidget : AppWidgetProvider() {
         )
         views.setOnClickPendingIntent(R.id.widget_layout, refreshPendingIntent)
 
+        // Cancel any existing job for this widget
+        activeJobs[appWidgetId]?.cancel()
+        
         // Set loading state first
         setLoadingState(views)
         appWidgetManager.updateAppWidget(appWidgetId, views)
 
-        // Fetch latest data
-        getOrCreateScope().launch {
+        // Start new job
+        activeJobs[appWidgetId] = getOrCreateScope().launch {
             try {
                 val mempoolApi = WidgetNetworkClient.getMempoolApi(context)
-                val response = mempoolApi.getFeeRates()
-                if (response.isSuccessful) {
-                    response.body()?.let { feeRates ->
-                        views.setTextViewText(R.id.priority_fee, "${feeRates.fastestFee}")
-                        views.setTextViewText(R.id.standard_fee, "${feeRates.halfHourFee}")
-                        views.setTextViewText(R.id.economy_fee, "${feeRates.hourFee}")
-                        appWidgetManager.updateAppWidget(appWidgetId, views)
+                var hasAnyData = false
+                
+                // Launch API call immediately
+                val feeRatesDeferred = async { mempoolApi.getFeeRates() }
+                
+                // Process response
+                try {
+                    val response = feeRatesDeferred.await()
+                    if (response.isSuccessful) {
+                        response.body()?.let { feeRates ->
+                            views.setTextViewText(R.id.priority_fee, "${feeRates.fastestFee}")
+                            views.setTextViewText(R.id.standard_fee, "${feeRates.halfHourFee}")
+                            views.setTextViewText(R.id.economy_fee, "${feeRates.hourFee}")
+                            hasAnyData = true
+                            appWidgetManager.updateAppWidget(appWidgetId, views)
+                        }
                     }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+
+                if (!hasAnyData) {
+                    setErrorState(views, "No data")
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
+                setErrorState(views, "Network error")
+            } finally {
+                appWidgetManager.updateAppWidget(appWidgetId, views)
+                activeJobs.remove(appWidgetId)
             }
         }
     }
@@ -116,5 +141,11 @@ class FeeRatesWidget : AppWidgetProvider() {
         views.setTextViewText(R.id.priority_fee, "...")
         views.setTextViewText(R.id.standard_fee, "...")
         views.setTextViewText(R.id.economy_fee, "...")
+    }
+
+    private fun setErrorState(views: RemoteViews, error: String) {
+        views.setTextViewText(R.id.priority_fee, "!")
+        views.setTextViewText(R.id.standard_fee, "!")
+        views.setTextViewText(R.id.economy_fee, "($error)")
     }
 } 

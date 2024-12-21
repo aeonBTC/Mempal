@@ -17,6 +17,7 @@ class MempoolSizeWidget : AppWidgetProvider() {
     companion object {
         const val REFRESH_ACTION = "com.example.mempal.REFRESH_MEMPOOL_SIZE_WIDGET"
         private var widgetScope: CoroutineScope? = null
+        private var activeJobs = mutableMapOf<Int, Job>()
     }
 
     private fun getOrCreateScope(): CoroutineScope {
@@ -35,11 +36,15 @@ class MempoolSizeWidget : AppWidgetProvider() {
         val appWidgetManager = AppWidgetManager.getInstance(context)
         val blockHeightWidget = ComponentName(context, BlockHeightWidget::class.java)
         val combinedStatsWidget = ComponentName(context, CombinedStatsWidget::class.java)
+        val feeRatesWidget = ComponentName(context, FeeRatesWidget::class.java)
         
         if (appWidgetManager.getAppWidgetIds(blockHeightWidget).isEmpty() &&
-            appWidgetManager.getAppWidgetIds(combinedStatsWidget).isEmpty()) {
+            appWidgetManager.getAppWidgetIds(combinedStatsWidget).isEmpty() &&
+            appWidgetManager.getAppWidgetIds(feeRatesWidget).isEmpty()) {
             WidgetUpdater.cancelUpdates(context)
             // Cancel any ongoing coroutines
+            activeJobs.values.forEach { it.cancel() }
+            activeJobs.clear()
             widgetScope?.cancel()
             widgetScope = null
         }
@@ -89,30 +94,52 @@ class MempoolSizeWidget : AppWidgetProvider() {
         )
         views.setOnClickPendingIntent(R.id.widget_layout, refreshPendingIntent)
 
+        // Cancel any existing job for this widget
+        activeJobs[appWidgetId]?.cancel()
+        
         // Set loading state first
         setLoadingState(views)
         appWidgetManager.updateAppWidget(appWidgetId, views)
 
-        // Fetch latest data
-        getOrCreateScope().launch {
+        // Start new job
+        activeJobs[appWidgetId] = getOrCreateScope().launch {
             try {
                 val mempoolApi = WidgetNetworkClient.getMempoolApi(context)
-                val response = mempoolApi.getMempoolInfo()
-                if (response.isSuccessful) {
-                    response.body()?.let { mempoolInfo ->
-                        val sizeInMB = mempoolInfo.vsize / 1_000_000.0
-                        views.setTextViewText(R.id.mempool_size, 
-                            String.format(Locale.US, "%.2f vMB", sizeInMB))
+                var hasAnyData = false
+                
+                // Launch API call immediately
+                val mempoolInfoDeferred = async { mempoolApi.getMempoolInfo() }
+                
+                // Process response
+                try {
+                    val response = mempoolInfoDeferred.await()
+                    if (response.isSuccessful) {
+                        response.body()?.let { mempoolInfo ->
+                            val sizeInMB = mempoolInfo.vsize / 1_000_000.0
+                            views.setTextViewText(R.id.mempool_size, 
+                                String.format(Locale.US, "%.2f vMB", sizeInMB))
+                                
+                            val blocksToClean = ceil(sizeInMB / 1.5).toInt()
+                            views.setTextViewText(R.id.mempool_blocks_to_clear,
+                                "(${blocksToClean} blocks to clear)")
                             
-                        val blocksToClean = ceil(sizeInMB / 1.5).toInt()
-                        views.setTextViewText(R.id.mempool_blocks_to_clear,
-                            "(${blocksToClean} blocks to clear)")
-                            
-                        appWidgetManager.updateAppWidget(appWidgetId, views)
+                            hasAnyData = true
+                            appWidgetManager.updateAppWidget(appWidgetId, views)
+                        }
                     }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+
+                if (!hasAnyData) {
+                    setErrorState(views, "No data")
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
+                setErrorState(views, "Network error")
+            } finally {
+                appWidgetManager.updateAppWidget(appWidgetId, views)
+                activeJobs.remove(appWidgetId)
             }
         }
     }
@@ -120,5 +147,10 @@ class MempoolSizeWidget : AppWidgetProvider() {
     private fun setLoadingState(views: RemoteViews) {
         views.setTextViewText(R.id.mempool_size, "...")
         views.setTextViewText(R.id.mempool_blocks_to_clear, "")
+    }
+
+    private fun setErrorState(views: RemoteViews, error: String) {
+        views.setTextViewText(R.id.mempool_size, "!")
+        views.setTextViewText(R.id.mempool_blocks_to_clear, "($error)")
     }
 } 

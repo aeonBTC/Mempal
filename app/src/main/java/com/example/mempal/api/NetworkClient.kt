@@ -20,9 +20,9 @@ import java.lang.ref.WeakReference
 import java.util.concurrent.TimeUnit
 
 object NetworkClient {
-    private const val TIMEOUT_SECONDS = 25L
-    private const val TEST_TIMEOUT_SECONDS = 15L
-    private const val ONION_TEST_TIMEOUT_SECONDS = 45L
+    private const val TIMEOUT_SECONDS = 30L
+    private const val TEST_TIMEOUT_SECONDS = 20L
+    private const val ONION_TEST_TIMEOUT_SECONDS = 60L
     private var retrofit: Retrofit? = null
     private var contextRef: WeakReference<Context>? = null
     private val _isInitialized = MutableStateFlow(false)
@@ -31,15 +31,33 @@ object NetworkClient {
     private var connectivityManager: ConnectivityManager? = null
     private val _isNetworkAvailable = MutableStateFlow(false)
     val isNetworkAvailable: StateFlow<Boolean> = _isNetworkAvailable
+    private var lastInitAttempt = 0L
+    private val minInitRetryDelay = 2000L
 
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             super.onAvailable(network)
             coroutineScope?.launch {
                 _isNetworkAvailable.value = true
-                // Always try to reinitialize when network becomes available
-                setupRetrofit(TorManager.getInstance().torStatus.value == TorStatus.CONNECTED)
-                _isInitialized.value = true
+                
+                // Add delay before reinitializing to prevent rapid retries
+                val now = System.currentTimeMillis()
+                if (now - lastInitAttempt < minInitRetryDelay) {
+                    delay(minInitRetryDelay)
+                }
+                lastInitAttempt = now
+                
+                // Check Tor status before initializing
+                val torManager = TorManager.getInstance()
+                if (torManager.isTorEnabled()) {
+                    if (torManager.torStatus.value == TorStatus.CONNECTED) {
+                        setupRetrofit(true)
+                        _isInitialized.value = true
+                    }
+                } else {
+                    setupRetrofit(false)
+                    _isInitialized.value = true
+                }
             }
         }
 
@@ -72,6 +90,7 @@ object NetworkClient {
         
         // Check initial network state
         _isNetworkAvailable.value = isNetworkCurrentlyAvailable()
+        lastInitAttempt = System.currentTimeMillis()
 
         // Check if current API URL is an onion address and manage Tor accordingly
         val settingsRepository = SettingsRepository.getInstance(context)
@@ -92,11 +111,17 @@ object NetworkClient {
             torManager.torStatus.collect { status ->
                 println("Tor status changed: $status")
                 if (status == TorStatus.CONNECTED || status == TorStatus.DISCONNECTED) {
-                    println("Setting up Retrofit with useProxy=${status == TorStatus.CONNECTED}")
+                    // Add delay before reinitializing to prevent rapid retries
+                    val now = System.currentTimeMillis()
+                    if (now - lastInitAttempt < minInitRetryDelay) {
+                        delay(minInitRetryDelay)
+                    }
+                    lastInitAttempt = now
+                    
                     if (isNetworkCurrentlyAvailable()) {
+                        println("Setting up Retrofit with useProxy=${status == TorStatus.CONNECTED}")
                         setupRetrofit(status == TorStatus.CONNECTED)
                         _isInitialized.value = true
-                        println("NetworkClient initialization complete")
                     } else {
                         _isInitialized.value = false
                     }
@@ -139,6 +164,16 @@ object NetworkClient {
             .readTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .writeTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
+            .addInterceptor { chain ->
+                var attempt = 0
+                var response = chain.proceed(chain.request())
+                while (!response.isSuccessful && attempt < 3) {
+                    attempt++
+                    response.close()
+                    response = chain.proceed(chain.request())
+                }
+                response
+            }
 
         if (useProxy && baseUrl.contains(".onion")) {
             println("Setting up Tor proxy")

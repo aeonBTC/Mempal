@@ -15,8 +15,9 @@ junit = "4.13.2"
 androidx-test-ext = "1.1.5"
 espresso = "3.5.1"
 constraintlayout = "2.1.4"
-tor-android = "0.4.8.12"
+tor-android = "0.4.7.8"
 jtorctl = "0.4.5.7"
+localbroadcastmanager = "1.1.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "core-ktx" }
@@ -47,6 +48,7 @@ androidx-espresso-core = { group = "androidx.test.espresso", name = "espresso-co
 
 tor-android = { group = "info.guardianproject", name = "tor-android", version.ref = "tor-android" }
 jtorctl = { group = "info.guardianproject", name = "jtorctl", version.ref = "jtorctl" }
+androidx-localbroadcastmanager = { group = "androidx.localbroadcastmanager", name = "localbroadcastmanager", version.ref = "localbroadcastmanager" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

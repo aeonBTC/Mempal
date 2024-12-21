@@ -11,8 +11,8 @@ android {
         applicationId = "com.example.mempal"
         minSdk = 24
         targetSdk = 34
-        versionCode = 9
-        versionName = "1.4.1"
+        versionCode = 10
+        versionName = "1.4.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         multiDexEnabled = true
     }
@@ -101,6 +101,7 @@ dependencies {
 
     implementation(libs.tor.android)
     implementation(libs.jtorctl)
+    implementation(libs.androidx.localbroadcastmanager)
 
     // WorkManager
     implementation("androidx.work:work-runtime-ktx:2.9.0")

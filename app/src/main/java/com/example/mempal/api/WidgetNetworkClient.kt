@@ -1,6 +1,8 @@
 package com.example.mempal.api
 
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import com.example.mempal.repository.SettingsRepository
 import com.google.gson.GsonBuilder
 import okhttp3.OkHttpClient
@@ -12,12 +14,41 @@ import java.util.concurrent.TimeUnit
 object WidgetNetworkClient {
     private const val TIMEOUT_SECONDS = 10L
     private const val DEFAULT_API_URL = "https://mempool.space"
+    private var retrofit: Retrofit? = null
+    private var mempoolApi: MempoolApi? = null
 
     private val loggingInterceptor = HttpLoggingInterceptor().apply {
         level = HttpLoggingInterceptor.Level.BODY
     }
 
     fun getMempoolApi(context: Context): MempoolApi {
+        // Check if we have a valid API instance
+        mempoolApi?.let { api ->
+            if (!hasUrlChanged(context)) {
+                return api
+            }
+        }
+
+        // Create new API instance
+        return createMempoolApi(context).also { 
+            mempoolApi = it 
+        }
+    }
+
+    private fun hasUrlChanged(context: Context): Boolean {
+        val settingsRepository = SettingsRepository.getInstance(context)
+        val currentUrl = settingsRepository.getApiUrl()
+        return retrofit?.baseUrl()?.toString()?.contains(currentUrl) != true
+    }
+
+    private fun isNetworkAvailable(context: Context): Boolean {
+        val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+        val network = connectivityManager.activeNetwork ?: return false
+        val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
+        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+    }
+
+    private fun createMempoolApi(context: Context): MempoolApi {
         val settingsRepository = SettingsRepository.getInstance(context)
         val userApiUrl = settingsRepository.getApiUrl()
 
@@ -51,12 +82,12 @@ object WidgetNetworkClient {
             .setLenient()
             .create()
 
-        val retrofit = Retrofit.Builder()
+        retrofit = Retrofit.Builder()
             .baseUrl(baseUrl)
             .client(clientBuilder.build())
             .addConverterFactory(GsonConverterFactory.create(gson))
             .build()
 
-        return retrofit.create(MempoolApi::class.java)
+        return retrofit!!.create(MempoolApi::class.java)
     }
 } 

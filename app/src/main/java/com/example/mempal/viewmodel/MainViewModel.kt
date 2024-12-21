@@ -68,7 +68,7 @@ class MainViewModel : ViewModel() {
             // Set initial state based on Tor status if using Tor
             if (TorManager.getInstance().isTorEnabled()) {
                 val message = if (DashboardCache.hasCachedData()) {
-                    "Reconnecting to Tor network..."
+                    "Connecting to Tor network..."
                 } else {
                     "Connecting to Tor network..."
                 }
@@ -103,35 +103,27 @@ class MainViewModel : ViewModel() {
             }
         }
 
-        // Monitor Tor connection state
+        // Monitor Tor status changes
         viewModelScope.launch {
             TorManager.getInstance().torStatus.collect { status ->
                 when (status) {
-                    TorStatus.CONNECTED -> {
-                        // When Tor connects, show loading and refresh data
-                        _uiState.value = DashboardUiState.Loading
-                        refreshDashboardData()
-                    }
                     TorStatus.CONNECTING -> {
-                        // Show connecting message
-                        val message = if (DashboardCache.hasCachedData()) {
-                            "Reconnecting to Tor network..."
-                        } else {
-                            "Connecting to Tor network..."
-                        }
-                        _uiState.value = DashboardUiState.Error(message = message, isReconnecting = true)
-                    }
-                    else -> {
-                        if (TorManager.getInstance().isTorEnabled()) {
-                            // Only show Tor-related messages if Tor is enabled
-                            val message = if (DashboardCache.hasCachedData()) {
-                                "Reconnecting to Tor network..."
-                            } else {
-                                "Connecting to Tor network..."
-                            }
-                            _uiState.value = DashboardUiState.Error(message = message, isReconnecting = true)
+                        if (DashboardCache.hasCachedData()) {
+                            _uiState.value = DashboardUiState.Error(
+                                message = "Connecting to Tor network...",
+                                isReconnecting = true
+                            )
                         }
                     }
+                    TorStatus.ERROR -> {
+                        if (!NetworkClient.isInitialized.value) {
+                            _uiState.value = DashboardUiState.Error(
+                                message = "Connection failed. Check server settings.",
+                                isReconnecting = false
+                            )
+                        }
+                    }
+                    else -> { /* No action needed */ }
                 }
             }
         }
@@ -333,15 +325,21 @@ class MainViewModel : ViewModel() {
             _feeRates.value = cachedState.feeRates
             _mempoolInfo.value = cachedState.mempoolInfo
             
-            // Show appropriate message based on server type
-            val message = if (NetworkClient.isUsingOnion()) {
-                "Reconnecting to Tor network..."
-            } else {
-                "Fetching data..."
+            // Show appropriate message based on connection state
+            val message = when {
+                !NetworkClient.isNetworkAvailable.value -> "Waiting for network connection..."
+                NetworkClient.isUsingOnion() && TorManager.getInstance().torStatus.value == TorStatus.CONNECTING -> 
+                    "Connecting to Tor network..."
+                else -> "Connecting to server..."
             }
             _uiState.value = DashboardUiState.Error(message = message, isReconnecting = true)
         } else {
-            val message = "Connection failed. Check server settings."
+            val message = when {
+                !NetworkClient.isNetworkAvailable.value -> "No network connection"
+                NetworkClient.isUsingOnion() && TorManager.getInstance().torStatus.value != TorStatus.CONNECTED -> 
+                    "Tor connection failed"
+                else -> "Connection failed. Check server settings."
+            }
             _uiState.value = DashboardUiState.Error(message = message, isReconnecting = false)
         }
         _isMainRefreshing.value = false

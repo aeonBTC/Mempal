@@ -1,0 +1,2 @@
+- F-droid compatibility patch.
+- Widget optimizations and bug fixes.

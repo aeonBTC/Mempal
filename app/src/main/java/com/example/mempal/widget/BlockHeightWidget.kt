@@ -16,6 +16,7 @@ class BlockHeightWidget : AppWidgetProvider() {
     companion object {
         const val REFRESH_ACTION = "com.example.mempal.REFRESH_BLOCK_HEIGHT_WIDGET"
         private var widgetScope: CoroutineScope? = null
+        private var activeJobs = mutableMapOf<Int, Job>()
     }
 
     private fun getOrCreateScope(): CoroutineScope {
@@ -32,13 +33,17 @@ class BlockHeightWidget : AppWidgetProvider() {
         super.onDisabled(context)
         // Only cancel updates if no other widgets are active
         val appWidgetManager = AppWidgetManager.getInstance(context)
-        val combinedStatsWidget = ComponentName(context, CombinedStatsWidget::class.java)
         val mempoolSizeWidget = ComponentName(context, MempoolSizeWidget::class.java)
+        val combinedStatsWidget = ComponentName(context, CombinedStatsWidget::class.java)
+        val feeRatesWidget = ComponentName(context, FeeRatesWidget::class.java)
         
-        if (appWidgetManager.getAppWidgetIds(combinedStatsWidget).isEmpty() &&
-            appWidgetManager.getAppWidgetIds(mempoolSizeWidget).isEmpty()) {
+        if (appWidgetManager.getAppWidgetIds(mempoolSizeWidget).isEmpty() &&
+            appWidgetManager.getAppWidgetIds(combinedStatsWidget).isEmpty() &&
+            appWidgetManager.getAppWidgetIds(feeRatesWidget).isEmpty()) {
             WidgetUpdater.cancelUpdates(context)
             // Cancel any ongoing coroutines
+            activeJobs.values.forEach { it.cancel() }
+            activeJobs.clear()
             widgetScope?.cancel()
             widgetScope = null
         }
@@ -88,41 +93,74 @@ class BlockHeightWidget : AppWidgetProvider() {
         )
         views.setOnClickPendingIntent(R.id.widget_layout, refreshPendingIntent)
 
+        // Cancel any existing job for this widget
+        activeJobs[appWidgetId]?.cancel()
+        
         // Set loading state first
         setLoadingState(views)
         appWidgetManager.updateAppWidget(appWidgetId, views)
 
-        // Fetch latest data
-        getOrCreateScope().launch {
+        // Start new job
+        activeJobs[appWidgetId] = getOrCreateScope().launch {
             try {
                 val mempoolApi = WidgetNetworkClient.getMempoolApi(context)
-                val blockHeightResponse = mempoolApi.getBlockHeight()
-                if (blockHeightResponse.isSuccessful) {
-                    blockHeightResponse.body()?.let { blockHeight ->
-                        views.setTextViewText(R.id.block_height, 
-                            String.format(Locale.US, "%,d", blockHeight))
-                        
-                        // Get block timestamp
-                        val blockHashResponse = mempoolApi.getLatestBlockHash()
-                        if (blockHashResponse.isSuccessful) {
-                            val hash = blockHashResponse.body()
-                            if (hash != null) {
-                                val blockInfoResponse = mempoolApi.getBlockInfo(hash)
-                                if (blockInfoResponse.isSuccessful) {
-                                    blockInfoResponse.body()?.timestamp?.let { timestamp ->
-                                        val elapsedMinutes = (System.currentTimeMillis() / 1000 - timestamp) / 60
-                                        views.setTextViewText(R.id.elapsed_time, 
-                                            "(${elapsedMinutes} minutes ago)")
+                
+                // Launch both API calls concurrently
+                val blockHeightDeferred = async { mempoolApi.getBlockHeight() }
+                val blockHashDeferred = async { mempoolApi.getLatestBlockHash() }
+                
+                var hasAnyData = false
+                
+                // Wait for block height first
+                try {
+                    val blockHeightResponse = blockHeightDeferred.await()
+                    if (blockHeightResponse.isSuccessful) {
+                        blockHeightResponse.body()?.let { blockHeight ->
+                            views.setTextViewText(R.id.block_height, 
+                                String.format(Locale.US, "%,d", blockHeight))
+                            hasAnyData = true
+                            
+                            // Process block hash and timestamp concurrently
+                            try {
+                                val blockHashResponse = blockHashDeferred.await()
+                                if (blockHashResponse.isSuccessful) {
+                                    val hash = blockHashResponse.body()
+                                    if (hash != null) {
+                                        // Launch block info request immediately
+                                        val blockInfoDeferred = async { mempoolApi.getBlockInfo(hash) }
+                                        val blockInfoResponse = blockInfoDeferred.await()
+                                        if (blockInfoResponse.isSuccessful) {
+                                            blockInfoResponse.body()?.timestamp?.let { timestamp ->
+                                                val elapsedMinutes = (System.currentTimeMillis() / 1000 - timestamp) / 60
+                                                views.setTextViewText(R.id.elapsed_time, 
+                                                    "(${elapsedMinutes} minutes ago)")
+                                            }
+                                        }
                                     }
                                 }
+                            } catch (e: Exception) {
+                                // If timestamp fetch fails, just show block height
+                                views.setTextViewText(R.id.elapsed_time, "")
                             }
+                            
+                            // Update widget with at least block height
+                            appWidgetManager.updateAppWidget(appWidgetId, views)
                         }
-                        
-                        appWidgetManager.updateAppWidget(appWidgetId, views)
                     }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+
+                // If we didn't get any data at all, show error
+                if (!hasAnyData) {
+                    setErrorState(views, "No data")
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
+                setErrorState(views, "Network error")
+            } finally {
+                appWidgetManager.updateAppWidget(appWidgetId, views)
+                activeJobs.remove(appWidgetId)
             }
         }
     }
@@ -130,5 +168,10 @@ class BlockHeightWidget : AppWidgetProvider() {
     private fun setLoadingState(views: RemoteViews) {
         views.setTextViewText(R.id.block_height, "...")
         views.setTextViewText(R.id.elapsed_time, "")
+    }
+
+    private fun setErrorState(views: RemoteViews, error: String) {
+        views.setTextViewText(R.id.block_height, "!")
+        views.setTextViewText(R.id.elapsed_time, "($error)")
     }
 } 

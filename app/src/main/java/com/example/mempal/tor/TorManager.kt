@@ -34,11 +34,15 @@ class TorManager private constructor() {
     private val _torConnectionEvent = MutableSharedFlow<Boolean>()
     val torConnectionEvent: SharedFlow<Boolean> = _torConnectionEvent
     private var lastConnectionAttempt = 0L
+    private var lastFailureMessage = 0L
     private var connectionAttempts = 0
-    private val maxConnectionAttempts = 5
-    private val minRetryDelay = 2000L // 2 seconds
-    private val maxRetryDelay = 30000L // 30 seconds
-    private val initialConnectionTimeout = 5100L // Initial connection timeout
+    private val maxConnectionAttempts = 20
+    private val minRetryDelay = 1500L
+    private val maxRetryDelay = 20000L
+    private val initialConnectionTimeout = 7000L
+    private val minTimeBetweenFailures = 30000L
+    private val maxInitialAttempts = 5
+    private var isInInitialConnection = true
 
     companion object {
         @Volatile
@@ -89,6 +93,9 @@ class TorManager private constructor() {
         try {
             shouldBeTorEnabled = true
             _torStatus.value = TorStatus.CONNECTING
+            connectionAttempts = 0
+            lastFailureMessage = 0L
+            isInInitialConnection = true
 
             val intent = Intent(context, TorService::class.java).apply {
                 action = ACTION_START
@@ -99,44 +106,57 @@ class TorManager private constructor() {
             connectionJob?.cancel()
             connectionJob = scope?.launch {
                 var currentDelay = minRetryDelay
-                connectionAttempts = 0
+                var initialAttempts = 0
 
                 while (isActive) {
+                    delay(if (connectionAttempts == 0) initialConnectionTimeout else currentDelay)
+                    
                     if (connectionAttempts > 0) {
-                        delay(currentDelay)
-                        // Exponential backoff with max delay cap
-                        currentDelay = (currentDelay * 1.5).toLong().coerceAtMost(maxRetryDelay)
-                    } else {
-                        delay(initialConnectionTimeout)
+                        currentDelay = (currentDelay * 1.2).toLong().coerceAtMost(maxRetryDelay)
                     }
 
                     try {
                         withContext(Dispatchers.IO) {
                             val socket = java.net.Socket()
                             try {
-                                socket.connect(java.net.InetSocketAddress("127.0.0.1", 9050), 2000)
+                                socket.connect(java.net.InetSocketAddress("127.0.0.1", 9050), 5000)
                                 socket.close()
                                 _torStatus.value = TorStatus.CONNECTED
                                 _proxyReady.value = true
                                 emitConnectionEvent(true)
-                                connectionAttempts = 0 // Reset attempts on success
+                                connectionAttempts = 0
+                                initialAttempts = 0
                                 lastConnectionAttempt = System.currentTimeMillis()
+                                lastFailureMessage = 0L
+                                isInInitialConnection = false
                                 return@withContext
                             } catch (e: Exception) {
                                 socket.close()
                                 throw e
                             }
                         }
-                        break // Connection successful
+                        break
                     } catch (_: Exception) {
                         connectionAttempts++
-                        if (connectionAttempts >= maxConnectionAttempts) {
-                            // Instead of moving to ERROR state, stay in CONNECTING
-                            // This allows the UI to keep showing "Reconnecting to Tor network..."
-                            connectionAttempts = 0 // Reset attempts to allow continuous retry
-                            currentDelay = maxRetryDelay // Use max delay for subsequent attempts
-                            emitConnectionEvent(false)
+                        
+                        if (isInInitialConnection && connectionAttempts <= maxInitialAttempts) {
+                            initialAttempts++
+                            _torStatus.value = TorStatus.CONNECTING
+                            continue
                         }
+                        
+                        isInInitialConnection = false
+                        val now = System.currentTimeMillis()
+                        
+                        if (connectionAttempts >= maxConnectionAttempts && 
+                            !isInInitialConnection &&
+                            (now - lastFailureMessage > minTimeBetweenFailures || lastFailureMessage == 0L)) {
+                            connectionAttempts = maxConnectionAttempts / 2
+                            emitConnectionEvent(false)
+                            lastFailureMessage = now
+                        }
+                        
+                        _torStatus.value = TorStatus.CONNECTING
                     }
                 }
             }
@@ -151,6 +171,7 @@ class TorManager private constructor() {
     fun stopTor(context: Context) {
         try {
             shouldBeTorEnabled = false
+            isInInitialConnection = true
 
             connectionJob?.cancel()
             connectionJob = null
@@ -197,17 +218,15 @@ class TorManager private constructor() {
     fun checkAndRestoreTorConnection(context: Context) {
         if (!shouldBeTorEnabled) return
 
-        // Prevent rapid reconnection attempts
         val now = System.currentTimeMillis()
-        if (now - lastConnectionAttempt < minRetryDelay) return
+        if (now - lastConnectionAttempt < (minRetryDelay / 2)) return
 
         scope?.launch {
             try {
-                // First check if Tor is actually running
                 val torRunning = withContext(Dispatchers.IO) {
                     try {
                         val socket = java.net.Socket()
-                        socket.connect(java.net.InetSocketAddress("127.0.0.1", 9050), 1000)
+                        socket.connect(java.net.InetSocketAddress("127.0.0.1", 9050), 500)
                         socket.close()
                         true
                     } catch (_: Exception) {
@@ -217,17 +236,21 @@ class TorManager private constructor() {
 
                 if (!torRunning) {
                     if (torStatus.value != TorStatus.CONNECTING) {
-                        // Tor is not running, start it
+                        connectionAttempts = 0
+                        lastFailureMessage = 0L
                         startTor(context)
                     }
                 } else if (torStatus.value != TorStatus.CONNECTED) {
-                    // Tor is running but our status doesn't reflect it
                     _torStatus.value = TorStatus.CONNECTED
                     _proxyReady.value = true
                     emitConnectionEvent(true)
+                    connectionAttempts = 0
+                    lastFailureMessage = 0L
                 }
             } catch (_: Exception) {
                 if (torStatus.value != TorStatus.CONNECTING) {
+                    connectionAttempts = 0
+                    lastFailureMessage = 0L
                     startTor(context)
                 }
             }
