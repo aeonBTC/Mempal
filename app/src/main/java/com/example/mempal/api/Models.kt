@@ -17,17 +17,4 @@ data class MempoolInfo(
     val isUsingFallbackHistogram: Boolean = false
 ) {
     fun needsHistogramFallback(): Boolean = feeHistogram.isEmpty()
-
-    fun withFallbackHistogram(fallbackHistogram: List<List<Double>>): MempoolInfo {
-        return copy(
-            feeHistogram = fallbackHistogram,
-            isUsingFallbackHistogram = true
-        )
-    }
-}
-
-sealed class Result<out T> {
-    data class Success<T>(val data: T) : Result<T>()
-    data class Error(val message: String) : Result<Nothing>()
-    object Loading : Result<Nothing>()
 }

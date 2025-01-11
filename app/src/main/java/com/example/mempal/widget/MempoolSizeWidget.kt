@@ -92,20 +92,20 @@ class MempoolSizeWidget : AppWidgetProvider() {
             context, 0, refreshIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        views.setOnClickPendingIntent(R.id.widget_layout, refreshPendingIntent)
 
         // Cancel any existing job for this widget
         activeJobs[appWidgetId]?.cancel()
         
         // Set loading state first
         setLoadingState(views)
+        // Set click handler immediately after creating views
+        views.setOnClickPendingIntent(R.id.widget_layout, refreshPendingIntent)
         appWidgetManager.updateAppWidget(appWidgetId, views)
 
         // Start new job
         activeJobs[appWidgetId] = getOrCreateScope().launch {
             try {
                 val mempoolApi = WidgetNetworkClient.getMempoolApi(context)
-                var hasAnyData = false
                 
                 // Launch API call immediately
                 val mempoolInfoDeferred = async { mempoolApi.getMempoolInfo() }
@@ -123,20 +123,19 @@ class MempoolSizeWidget : AppWidgetProvider() {
                             views.setTextViewText(R.id.mempool_blocks_to_clear,
                                 "(${blocksToClean} blocks to clear)")
                             
-                            hasAnyData = true
                             appWidgetManager.updateAppWidget(appWidgetId, views)
+                            return@launch
                         }
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
 
-                if (!hasAnyData) {
-                    setErrorState(views, "No data")
-                }
+                // If we get here, we didn't get any data
+                setErrorState(views)
             } catch (e: Exception) {
                 e.printStackTrace()
-                setErrorState(views, "Network error")
+                setErrorState(views)
             } finally {
                 appWidgetManager.updateAppWidget(appWidgetId, views)
                 activeJobs.remove(appWidgetId)
@@ -149,8 +148,8 @@ class MempoolSizeWidget : AppWidgetProvider() {
         views.setTextViewText(R.id.mempool_blocks_to_clear, "")
     }
 
-    private fun setErrorState(views: RemoteViews, error: String) {
-        views.setTextViewText(R.id.mempool_size, "!")
-        views.setTextViewText(R.id.mempool_blocks_to_clear, "($error)")
+    private fun setErrorState(views: RemoteViews) {
+        views.setTextViewText(R.id.mempool_size, "?")
+        views.setTextViewText(R.id.mempool_blocks_to_clear, "")
     }
 } 

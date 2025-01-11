@@ -91,13 +91,14 @@ class BlockHeightWidget : AppWidgetProvider() {
             context, 0, refreshIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        views.setOnClickPendingIntent(R.id.widget_layout, refreshPendingIntent)
 
         // Cancel any existing job for this widget
         activeJobs[appWidgetId]?.cancel()
         
         // Set loading state first
         setLoadingState(views)
+        // Set click handler immediately after creating views
+        views.setOnClickPendingIntent(R.id.widget_layout, refreshPendingIntent)
         appWidgetManager.updateAppWidget(appWidgetId, views)
 
         // Start new job
@@ -109,8 +110,6 @@ class BlockHeightWidget : AppWidgetProvider() {
                 val blockHeightDeferred = async { mempoolApi.getBlockHeight() }
                 val blockHashDeferred = async { mempoolApi.getLatestBlockHash() }
                 
-                var hasAnyData = false
-                
                 // Wait for block height first
                 try {
                     val blockHeightResponse = blockHeightDeferred.await()
@@ -118,7 +117,6 @@ class BlockHeightWidget : AppWidgetProvider() {
                         blockHeightResponse.body()?.let { blockHeight ->
                             views.setTextViewText(R.id.block_height, 
                                 String.format(Locale.US, "%,d", blockHeight))
-                            hasAnyData = true
                             
                             // Process block hash and timestamp concurrently
                             try {
@@ -140,24 +138,25 @@ class BlockHeightWidget : AppWidgetProvider() {
                                 }
                             } catch (e: Exception) {
                                 // If timestamp fetch fails, just show block height
+                                println("Error fetching block timestamp: ${e.message}")
+                                e.printStackTrace()
                                 views.setTextViewText(R.id.elapsed_time, "")
                             }
                             
                             // Update widget with at least block height
                             appWidgetManager.updateAppWidget(appWidgetId, views)
+                            return@launch
                         }
                     }
                 } catch (e: Exception) {
                     e.printStackTrace()
                 }
 
-                // If we didn't get any data at all, show error
-                if (!hasAnyData) {
-                    setErrorState(views, "No data")
-                }
+                // If we get here, we didn't get any data
+                setErrorState(views)
             } catch (e: Exception) {
                 e.printStackTrace()
-                setErrorState(views, "Network error")
+                setErrorState(views)
             } finally {
                 appWidgetManager.updateAppWidget(appWidgetId, views)
                 activeJobs.remove(appWidgetId)
@@ -170,8 +169,8 @@ class BlockHeightWidget : AppWidgetProvider() {
         views.setTextViewText(R.id.elapsed_time, "")
     }
 
-    private fun setErrorState(views: RemoteViews, error: String) {
-        views.setTextViewText(R.id.block_height, "!")
-        views.setTextViewText(R.id.elapsed_time, "($error)")
+    private fun setErrorState(views: RemoteViews) {
+        views.setTextViewText(R.id.block_height, "?")
+        views.setTextViewText(R.id.elapsed_time, "")
     }
 } 

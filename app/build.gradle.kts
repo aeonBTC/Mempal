@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    id("app.accrescent.tools.bundletool") version "0.2.4"
 }
 
 android {
@@ -11,8 +12,8 @@ android {
         applicationId = "com.example.mempal"
         minSdk = 24
         targetSdk = 34
-        versionCode = 10
-        versionName = "1.4.2"
+        versionCode = 11
+        versionName = "1.4.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         multiDexEnabled = true
     }
