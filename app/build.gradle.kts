@@ -1,19 +1,18 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
-    id("app.accrescent.tools.bundletool") version "0.2.4"
 }
 
 android {
     namespace = "com.example.mempal"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.example.mempal"
         minSdk = 24
-        targetSdk = 34
-        versionCode = 11
-        versionName = "1.4.3"
+        targetSdk = 35
+        versionCode = 12
+        versionName = "1.5.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         multiDexEnabled = true
     }
@@ -26,6 +25,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
@@ -97,14 +97,14 @@ dependencies {
 
     implementation(libs.androidx.core.splashscreen)
     implementation("androidx.multidex:multidex:2.0.1")
-    implementation("androidx.core:core:1.12.0")
-    implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation(libs.androidx.core.ktx)
+    implementation("androidx.appcompat:appcompat:1.7.0")
 
     implementation(libs.tor.android)
     implementation(libs.jtorctl)
     implementation(libs.androidx.localbroadcastmanager)
 
     // WorkManager
-    implementation("androidx.work:work-runtime-ktx:2.9.0")
-    implementation("androidx.work:work-runtime:2.9.0")
+    implementation("androidx.work:work-runtime-ktx:2.10.0")
+    implementation("androidx.work:work-runtime:2.10.0")
 }

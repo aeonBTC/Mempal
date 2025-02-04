@@ -57,7 +57,7 @@ class BlockHeightWidget : AppWidgetProvider() {
                 val launchIntent = WidgetUtils.getLaunchAppIntent(context)
                 launchIntent.send()
             } else {
-                // Single tap - refresh widget
+                // Single tap - refresh only this widget
                 val appWidgetManager = AppWidgetManager.getInstance(context)
                 val thisWidget = ComponentName(context, BlockHeightWidget::class.java)
                 onUpdate(context, appWidgetManager, appWidgetManager.getAppWidgetIds(thisWidget))
@@ -131,7 +131,7 @@ class BlockHeightWidget : AppWidgetProvider() {
                                             blockInfoResponse.body()?.timestamp?.let { timestamp ->
                                                 val elapsedMinutes = (System.currentTimeMillis() / 1000 - timestamp) / 60
                                                 views.setTextViewText(R.id.elapsed_time, 
-                                                    "(${elapsedMinutes} minutes ago)")
+                                                    "(${elapsedMinutes} ${if (elapsedMinutes == 1L) "minute" else "minutes"} ago)")
                                             }
                                         }
                                     }

@@ -56,7 +56,7 @@ class FeeRatesWidget : AppWidgetProvider() {
                 val launchIntent = WidgetUtils.getLaunchAppIntent(context)
                 launchIntent.send()
             } else {
-                // Single tap - refresh widget
+                // Single tap - refresh only this widget
                 val appWidgetManager = AppWidgetManager.getInstance(context)
                 val thisWidget = ComponentName(context, FeeRatesWidget::class.java)
                 onUpdate(context, appWidgetManager, appWidgetManager.getAppWidgetIds(thisWidget))

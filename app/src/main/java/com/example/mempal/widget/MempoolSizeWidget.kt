@@ -58,7 +58,7 @@ class MempoolSizeWidget : AppWidgetProvider() {
                 val launchIntent = WidgetUtils.getLaunchAppIntent(context)
                 launchIntent.send()
             } else {
-                // Single tap - refresh widget
+                // Single tap - refresh only this widget
                 val appWidgetManager = AppWidgetManager.getInstance(context)
                 val thisWidget = ComponentName(context, MempoolSizeWidget::class.java)
                 onUpdate(context, appWidgetManager, appWidgetManager.getAppWidgetIds(thisWidget))
@@ -121,7 +121,7 @@ class MempoolSizeWidget : AppWidgetProvider() {
                                 
                             val blocksToClean = ceil(sizeInMB / 1.5).toInt()
                             views.setTextViewText(R.id.mempool_blocks_to_clear,
-                                "(${blocksToClean} blocks to clear)")
+                                "(${blocksToClean} ${if (blocksToClean == 1) "block" else "blocks"} to clear)")
                             
                             appWidgetManager.updateAppWidget(appWidgetId, views)
                             return@launch

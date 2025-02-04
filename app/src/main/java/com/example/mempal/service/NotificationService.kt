@@ -2,6 +2,7 @@ package com.example.mempal.service
 
 import android.annotation.SuppressLint
 import android.app.*
+import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
@@ -20,6 +21,26 @@ class NotificationService : Service() {
         const val NOTIFICATION_ID = 1
         const val CHANNEL_ID = "mempal_notifications"
         private const val TAG = "NotificationService"
+        const val ACTION_STOP_SERVICE = "com.example.mempal.STOP_SERVICE"
+
+        @Volatile
+        private var isRunningFlag = false
+
+        fun isServiceRunning(): Boolean {
+            return isRunningFlag
+        }
+
+        fun syncServiceState(context: Context) {
+            val isRunning = isServiceRunning()
+            val settingsRepository = SettingsRepository.getInstance(context)
+            
+            // Update settings if they don't match the actual service state
+            if (settingsRepository.settings.value.isServiceEnabled != isRunning) {
+                settingsRepository.updateSettings(
+                    settingsRepository.settings.value.copy(isServiceEnabled = isRunning)
+                )
+            }
+        }
     }
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -33,6 +54,7 @@ class NotificationService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        isRunningFlag = true
         settingsRepository = SettingsRepository.getInstance(applicationContext)
         NetworkClient.initialize(applicationContext)
         createNotificationChannel()
@@ -66,7 +88,20 @@ class NotificationService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        when (intent?.action) {
+            ACTION_STOP_SERVICE -> {
+                // Update settings to show service is disabled
+                serviceScope.launch {
+                    settingsRepository.updateSettings(
+                        settingsRepository.settings.value.copy(isServiceEnabled = false)
+                    )
+                }
+                stopSelf()
+                return START_NOT_STICKY
+            }
+        }
         // Return START_STICKY to ensure service restarts if killed
+        startForeground(NOTIFICATION_ID, createForegroundNotification())
         return START_STICKY
     }
 
@@ -365,10 +400,35 @@ class NotificationService : Service() {
     }
 
     private fun createForegroundNotification(): Notification {
+        // Create pending intent to launch the app
+        val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE
+        )
+
+        // Create stop service action
+        val stopIntent = Intent(this, NotificationService::class.java).apply {
+            action = ACTION_STOP_SERVICE
+        }
+        val stopPendingIntent = PendingIntent.getService(
+            this,
+            0,
+            stopIntent,
+            PendingIntent.FLAG_IMMUTABLE
+        )
+
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Mempal")
             .setContentText("Monitoring Bitcoin Network")
             .setSmallIcon(R.drawable.ic_cube)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)  // Make notification persistent
+            .addAction(R.drawable.ic_cube, "Stop Service", stopPendingIntent)  // Add stop action
             .build()
     }
 
@@ -379,6 +439,8 @@ class NotificationService : Service() {
             val importance = NotificationManager.IMPORTANCE_DEFAULT
             val channel = NotificationChannel(CHANNEL_ID, name, importance).apply {
                 description = descriptionText
+                setShowBadge(true)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
             val notificationManager: NotificationManager =
                 getSystemService(NOTIFICATION_SERVICE) as NotificationManager
@@ -387,11 +449,24 @@ class NotificationService : Service() {
     }
 
     private fun showNotification(title: String, content: String) {
+        // Create pending intent to launch the app
+        val intent = packageManager.getLaunchIntentForPackage(packageName)?.apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            intent,
+            PendingIntent.FLAG_IMMUTABLE
+        )
+
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(content)
             .setSmallIcon(R.drawable.ic_cube)
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setAutoCancel(true)  // Automatically remove the notification when tapped
+            .setContentIntent(pendingIntent)
             .build()
 
         val notificationManager =
@@ -402,6 +477,7 @@ class NotificationService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
+        isRunningFlag = false
         monitoringJobs.values.forEach { it.cancel() }
         monitoringJobs.clear()
         serviceScope.cancel()

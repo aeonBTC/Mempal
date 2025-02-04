@@ -1,65 +1,74 @@
 package com.example.mempal.widget
 
+import android.app.PendingIntent
 import android.appwidget.AppWidgetManager
+import android.appwidget.AppWidgetProvider
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.PowerManager
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import kotlinx.coroutines.*
 
 class WidgetUpdateWorker(
     private val appContext: Context,
     params: WorkerParameters
 ) : CoroutineWorker(appContext, params) {
 
-    override suspend fun doWork(): Result {
+    override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        var wakeLock: PowerManager.WakeLock? = null
         try {
+            // Acquire wake lock
+            wakeLock = WidgetUpdater.acquireWakeLock(appContext)
+
             val appWidgetManager = AppWidgetManager.getInstance(appContext)
+            val updateDelay = 500L // Default delay between widget updates
 
-            // Update BlockHeightWidget
-            val blockHeightWidget = ComponentName(appContext, BlockHeightWidget::class.java)
-            val blockHeightWidgetIds = appWidgetManager.getAppWidgetIds(blockHeightWidget)
-            if (blockHeightWidgetIds.isNotEmpty()) {
-                val blockHeightIntent = Intent(appContext, BlockHeightWidget::class.java).apply {
-                    action = BlockHeightWidget.REFRESH_ACTION
-                }
-                appContext.sendBroadcast(blockHeightIntent)
-            }
+            // Update each type of widget with a delay between them
+            updateWidget(appWidgetManager, BlockHeightWidget::class.java, BlockHeightWidget.REFRESH_ACTION, 0)
+            delay(updateDelay)
+            updateWidget(appWidgetManager, MempoolSizeWidget::class.java, MempoolSizeWidget.REFRESH_ACTION, 1)
+            delay(updateDelay)
+            updateWidget(appWidgetManager, FeeRatesWidget::class.java, FeeRatesWidget.REFRESH_ACTION, 2)
+            delay(updateDelay)
+            updateWidget(appWidgetManager, CombinedStatsWidget::class.java, CombinedStatsWidget.REFRESH_ACTION, 3)
 
-            // Update CombinedStatsWidget
-            val combinedStatsWidget = ComponentName(appContext, CombinedStatsWidget::class.java)
-            val combinedStatsWidgetIds = appWidgetManager.getAppWidgetIds(combinedStatsWidget)
-            if (combinedStatsWidgetIds.isNotEmpty()) {
-                val combinedStatsIntent = Intent(appContext, CombinedStatsWidget::class.java).apply {
-                    action = CombinedStatsWidget.REFRESH_ACTION
-                }
-                appContext.sendBroadcast(combinedStatsIntent)
-            }
-
-            // Update MempoolSizeWidget
-            val mempoolSizeWidget = ComponentName(appContext, MempoolSizeWidget::class.java)
-            val mempoolSizeWidgetIds = appWidgetManager.getAppWidgetIds(mempoolSizeWidget)
-            if (mempoolSizeWidgetIds.isNotEmpty()) {
-                val mempoolSizeIntent = Intent(appContext, MempoolSizeWidget::class.java).apply {
-                    action = MempoolSizeWidget.REFRESH_ACTION
-                }
-                appContext.sendBroadcast(mempoolSizeIntent)
-            }
-
-            // Update FeeRatesWidget
-            val feeRatesWidget = ComponentName(appContext, FeeRatesWidget::class.java)
-            val feeRatesWidgetIds = appWidgetManager.getAppWidgetIds(feeRatesWidget)
-            if (feeRatesWidgetIds.isNotEmpty()) {
-                val feeRatesIntent = Intent(appContext, FeeRatesWidget::class.java).apply {
-                    action = FeeRatesWidget.REFRESH_ACTION
-                }
-                appContext.sendBroadcast(feeRatesIntent)
-            }
-
-            return Result.success()
+            Result.success()
         } catch (e: Exception) {
             e.printStackTrace()
-            return Result.retry()
+            Result.retry()
+        } finally {
+            // Release wake lock
+            WidgetUpdater.releaseWakeLock(wakeLock)
+        }
+    }
+
+    private fun updateWidget(
+        appWidgetManager: AppWidgetManager,
+        widgetClass: Class<out AppWidgetProvider>,
+        action: String,
+        requestCode: Int
+    ) {
+        try {
+            val widgetComponent = ComponentName(appContext, widgetClass)
+            val widgetIds = appWidgetManager.getAppWidgetIds(widgetComponent)
+            
+            if (widgetIds.isNotEmpty()) {
+                val refreshIntent = Intent(appContext, widgetClass).apply {
+                    this.action = action
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_INCLUDE_STOPPED_PACKAGES)
+                }
+
+                PendingIntent.getBroadcast(
+                    appContext,
+                    requestCode,
+                    refreshIntent,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                ).send()
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 

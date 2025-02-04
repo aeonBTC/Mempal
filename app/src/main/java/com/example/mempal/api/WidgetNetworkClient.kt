@@ -1,8 +1,6 @@
 package com.example.mempal.api
 
 import android.content.Context
-import android.net.ConnectivityManager
-import android.net.NetworkCapabilities
 import com.example.mempal.repository.SettingsRepository
 import com.google.gson.GsonBuilder
 import okhttp3.OkHttpClient
@@ -39,13 +37,6 @@ object WidgetNetworkClient {
         val settingsRepository = SettingsRepository.getInstance(context)
         val currentUrl = settingsRepository.getApiUrl()
         return retrofit?.baseUrl()?.toString()?.contains(currentUrl) != true
-    }
-
-    private fun isNetworkAvailable(context: Context): Boolean {
-        val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val network = connectivityManager.activeNetwork ?: return false
-        val capabilities = connectivityManager.getNetworkCapabilities(network) ?: return false
-        return capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
     }
 
     private fun createMempoolApi(context: Context): MempoolApi {

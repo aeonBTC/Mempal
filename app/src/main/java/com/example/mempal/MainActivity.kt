@@ -2,9 +2,9 @@ package com.example.mempal
 
 import android.Manifest
 import android.app.Activity
-import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
@@ -133,12 +133,6 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // Add helper function to check if service is running
-    private fun isServiceRunning(): Boolean {
-        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
-        return notificationManager.activeNotifications.any { it.id == NotificationService.NOTIFICATION_ID }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         val splashScreen = installSplashScreen()
         splashScreen.setKeepOnScreenCondition {
@@ -245,21 +239,8 @@ class MainActivity : ComponentActivity() {
 
     private fun updateServiceState() {
         lifecycleScope.launch {
-            val isRunning = isServiceRunning()
-            val currentSettings = settingsRepository.settings.value
-
-            if (isRunning && !currentSettings.isServiceEnabled) {
-                // Service is running but settings show it's disabled
-                settingsRepository.updateSettings(currentSettings.copy(isServiceEnabled = true))
-            } else if (!isRunning && currentSettings.isServiceEnabled) {
-                // Service should be running but isn't
-                val serviceIntent = Intent(this@MainActivity, NotificationService::class.java)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    startForegroundService(serviceIntent)
-                } else {
-                    startService(serviceIntent)
-                }
-            }
+            // Use the new method from NotificationService
+            NotificationService.syncServiceState(applicationContext)
         }
     }
 }
@@ -385,6 +366,8 @@ private fun AppHeader() {
     val torManager = remember { TorManager.getInstance() }
     val torStatus by torManager.torStatus.collectAsState()
     val torEnabled = remember(torStatus) { torManager.isTorEnabled() }
+    val context = LocalContext.current
+    val settingsRepository = remember { SettingsRepository.getInstance(context) }
 
     Box(
         modifier = Modifier
@@ -398,6 +381,63 @@ private fun AppHeader() {
             modifier = Modifier
                 .size(300.dp)
                 .align(Alignment.Center)
+                .clickable {
+                    try {
+                        val currentUrl = settingsRepository.getApiUrl().trim()
+                        
+                        // Check if it's an onion address
+                        if (currentUrl.contains(".onion")) {
+                            // Try Tor Browser first
+                            val torBrowserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(currentUrl)).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                setPackage("org.torproject.torbrowser")
+                            }
+                            
+                            // Try Orbot Browser second
+                            val orbotBrowserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(currentUrl)).apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                setPackage("org.torproject.android")
+                            }
+                            
+                            try {
+                                if (torBrowserIntent.resolveActivity(context.packageManager) != null) {
+                                    context.startActivity(torBrowserIntent)
+                                } else if (orbotBrowserIntent.resolveActivity(context.packageManager) != null) {
+                                    context.startActivity(orbotBrowserIntent)
+                                } else {
+                                    Toast.makeText(
+                                        context,
+                                        "Please install Tor Browser to open .onion links.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            } catch (_: Exception) {
+                                Toast.makeText(
+                                    context,
+                                    "Unable to open .onion link. Please install Tor Browser.",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                        } else {
+                            // Regular URL handling
+                            val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(currentUrl))
+                            browserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            
+                            if (browserIntent.resolveActivity(context.packageManager) != null) {
+                                context.startActivity(browserIntent)
+                            } else {
+                                Toast.makeText(
+                                    context,
+                                    "No web browser found to open $currentUrl",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }
+                        }
+                    } catch (e: Exception) {
+                        val errorMessage = "Unable to open URL: ${e.localizedMessage}"
+                        Toast.makeText(context, errorMessage, Toast.LENGTH_SHORT).show()
+                    }
+                }
         )
 
         // Tor Status Indicator (moved to bottom end)
@@ -467,35 +507,59 @@ private fun MainContent(
     val isInitialized = NetworkClient.isInitialized.collectAsState()
     val torManager = remember { TorManager.getInstance() }
     val torStatus by torManager.torStatus.collectAsState()
+    val context = LocalContext.current
+    val settingsRepository = remember { SettingsRepository.getInstance(context) }
+    val isUsingOnion = remember(settingsRepository) { settingsRepository.getApiUrl().contains(".onion") }
+
+    // Effect to refresh data when Tor connects and we're using an onion address
+    LaunchedEffect(torStatus, isUsingOnion) {
+        if (isUsingOnion && torStatus == TorStatus.CONNECTED && 
+            (blockHeight == null || feeRates == null || mempoolInfo == null)) {
+            delay(100) // Small delay to ensure Tor circuit is ready
+            viewModel.refreshData()
+        }
+    }
+
+    // Effect to periodically check and refresh if data is missing
+    LaunchedEffect(Unit) {
+        while (true) {
+            if (isUsingOnion && torStatus == TorStatus.CONNECTED && 
+                (blockHeight == null || feeRates == null || mempoolInfo == null)) {
+                viewModel.refreshData()
+            }
+            delay(3000) // Check every 3 seconds
+        }
+    }
 
     // Determine the appropriate message based on Tor connection and cache state
     val statusMessage = when {
+        // If using onion and Tor is not connected
+        isUsingOnion && torStatus != TorStatus.CONNECTED -> {
+            if (DashboardCache.hasCachedData()) "Waiting for Tor connection..." 
+            else "Connecting to Tor network..."
+        }
+        
         // If we're loading data
         isInitialized.value && uiState is DashboardUiState.Loading -> "Fetching data..."
         
         // If Tor is enabled and not connected or connecting
         torManager.isTorEnabled() && (!isInitialized.value || torStatus == TorStatus.CONNECTING) -> {
-            if (DashboardCache.hasCachedData()) {
-                "Reconnecting to Tor network..."
-            } else {
-                "Connecting to Tor network..."
-            }
+            if (DashboardCache.hasCachedData()) "Reconnecting to Tor network..."
+            else "Connecting to Tor network..."
         }
         
         // If not using Tor but network is not initialized
         !torManager.isTorEnabled() && !isInitialized.value -> {
-            if (DashboardCache.hasCachedData()) {
-                "Reconnecting to server..."
-            } else {
-                "Connecting to server..."
-            }
+            if (DashboardCache.hasCachedData()) "Reconnecting to server..."
+            else "Connecting to server..."
         }
         
         // For error states
         uiState is DashboardUiState.Error -> {
             if (torManager.isTorEnabled() && 
                 (uiState.message.contains("Connecting to Tor") || uiState.message.contains("Reconnecting to Tor"))) {
-                if (DashboardCache.hasCachedData()) "Reconnecting to Tor network..." else "Connecting to Tor network..."
+                if (DashboardCache.hasCachedData()) "Reconnecting to Tor network..." 
+                else "Connecting to Tor network..."
             } else {
                 uiState.message
             }
@@ -504,9 +568,11 @@ private fun MainContent(
         // For success states with cache
         uiState is DashboardUiState.Success && uiState.isCache -> {
             if (torManager.isTorEnabled()) {
-                if (DashboardCache.hasCachedData()) "Reconnecting to Tor network..." else "Connecting to Tor network..."
+                if (DashboardCache.hasCachedData()) "Reconnecting to Tor network..." 
+                else "Connecting to Tor network..."
             } else {
-                if (DashboardCache.hasCachedData()) "Reconnecting to server..." else "Connecting to server..."
+                if (DashboardCache.hasCachedData()) "Reconnecting to server..." 
+                else "Connecting to server..."
             }
         }
         
@@ -657,7 +723,7 @@ private fun MainContentDisplay(
                             blockTimestamp?.let { timestamp ->
                                 val elapsedMinutes = (System.currentTimeMillis() / 1000 - timestamp) / 60
                                 Text(
-                                    text = "(${elapsedMinutes} minutes ago)",
+                                    text = "(${elapsedMinutes} ${if (elapsedMinutes == 1L) "minute" else "minutes"} ago)",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = AppColors.DataGray.copy(alpha = 0.7f)
                                 )
@@ -685,7 +751,7 @@ private fun MainContentDisplay(
                             )
                             val blocksToClean = ceil(it.vsize / 1_000_000.0 / 1.5).toInt()
                             Text(
-                                text = "(${blocksToClean} blocks to clear)",
+                                text = "(${blocksToClean} ${if (blocksToClean == 1) "block" else "blocks"} to clear)",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = AppColors.DataGray.copy(alpha = 0.7f)
                             )
@@ -1351,7 +1417,15 @@ private fun NotificationSection(
                 )
                 Switch(
                     checked = config.enabled,
-                    onCheckedChange = config.onEnabledChange
+                    onCheckedChange = config.onEnabledChange,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = AppColors.Orange,
+                        uncheckedThumbColor = Color.Gray,
+                        uncheckedTrackColor = AppColors.DarkerNavy,
+                        checkedBorderColor = AppColors.Orange,
+                        uncheckedBorderColor = Color.Gray
+                    )
                 )
             }
             Text(
@@ -1628,7 +1702,15 @@ private fun FeeRatesNotificationSection(
                 )
                 Switch(
                     checked = enabled,
-                    onCheckedChange = onEnabledChange
+                    onCheckedChange = onEnabledChange,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = AppColors.Orange,
+                        uncheckedThumbColor = Color.Gray,
+                        uncheckedTrackColor = AppColors.DarkerNavy,
+                        checkedBorderColor = AppColors.Orange,
+                        uncheckedBorderColor = Color.Gray
+                    )
                 )
             }
             Text(
@@ -1764,10 +1846,10 @@ private fun TransactionConfirmationSection(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                    text = "Confirmation",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = AppColors.Orange
-                )
+                        text = "Confirmation",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = AppColors.Orange
+                    )
                     Spacer(modifier = Modifier.width(4.dp))
                     TooltipButton(
                         tooltip = "CAUTION: This feature has privacy implications.\nIf you're concerned about privacy, be sure to use the " +
@@ -1776,7 +1858,15 @@ private fun TransactionConfirmationSection(
                 }
                 Switch(
                     checked = enabled,
-                    onCheckedChange = onEnabledChange
+                    onCheckedChange = onEnabledChange,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = AppColors.Orange,
+                        uncheckedThumbColor = Color.Gray,
+                        uncheckedTrackColor = AppColors.DarkerNavy,
+                        checkedBorderColor = AppColors.Orange,
+                        uncheckedBorderColor = Color.Gray
+                    )
                 )
             }
             Text(
@@ -2214,10 +2304,10 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                         enabled = torStatus != TorStatus.CONNECTING,
                         colors = SwitchDefaults.colors(
                             checkedThumbColor = Color.White,
-                            checkedTrackColor = AppColors.Orange,
-                            uncheckedThumbColor = Color.Gray,
+                            checkedTrackColor = AppColors.DarkerNavy,
+                            uncheckedThumbColor = Color.White,
                             uncheckedTrackColor = AppColors.DarkerNavy,
-                            checkedBorderColor = AppColors.Orange,
+                            checkedBorderColor = Color.Gray,
                             uncheckedBorderColor = Color.Gray
                         )
                     )
@@ -2438,7 +2528,7 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                         expanded = expanded,
                         onDismissRequest = { expanded = false }
                     ) {
-                        listOf(5L, 15L, 30L, 60L).forEach { minutes ->
+                        listOf(15L, 30L, 45L, 60L).forEach { minutes ->
                             DropdownMenuItem(
                                 text = {
                                     Text(
@@ -2556,7 +2646,7 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
             IconButton(
                 onClick = {
                     val intent = Intent(Intent.ACTION_VIEW).apply {
-                        data = android.net.Uri.parse("https://github.com/aeonBTC/Mempal/")
+                        data = Uri.parse("https://github.com/aeonBTC/Mempal/")
                     }
                     context.startActivity(intent)
                 },
