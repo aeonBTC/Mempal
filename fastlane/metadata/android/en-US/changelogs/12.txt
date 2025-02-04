@@ -1,0 +1,3 @@
+- Tapping the Mempal logo now opens a web browser to mempool.space or equivalent custom mempool server.
+- Fixed bug when the notification service is manually dismissed from the status Bar.
+- Reworked widget implementation to solve update issues.
