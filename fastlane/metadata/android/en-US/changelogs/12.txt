@@ -1,4 +1,4 @@
 - Tapping the Mempal logo now opens a web browser to mempool.space or equivalent custom mempool server.
-- Fixed bug when the notification service is manually dismissed from the status Bar.
+- Fixed bug when notification service is manually dismissed from the status bar.
 - Reworked widget implementation to solve update issues.
-- Customized proguard-rules file to shrink app size and optimize overall performance. 
+- Customized proguard-rules file to shrink app size and increase overall performance.
