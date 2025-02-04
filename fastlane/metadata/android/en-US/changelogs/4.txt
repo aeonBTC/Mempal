@@ -1,2 +1,0 @@
-- Added widget functionality
-- Tap widget to refresh or auto refreshes every 30 minutes

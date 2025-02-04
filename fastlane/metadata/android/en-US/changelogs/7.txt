@@ -1,7 +1,0 @@
-- Elapsed time since latest block displayed on dashboard and widgets.
-- Number of blocks to clear mempool displayed on dashboard and widgets.
-- Tor connection indicator now displays on dashboard when connected over Tor.
-- Set specific block height alerts for notifications.
-- Widget update frequency option in settings.
-- Added tap to refresh widget feature and double tap to open Mempal app.
-- Various bug fixes and optimizations.

@@ -1,2 +1,0 @@
-- Accrescent compatibility patch.
-- Minor optimizations and bug fixes.
