@@ -1,65 +1,27 @@
 Categories:
-  - Bitcoin
-  - Cryptocurrency
-  - Blockchain
+  - Money
 License: MIT
 SourceCode: https://github.com/aeonBTC/Mempal
 IssueTracker: https://github.com/aeonBTC/Mempal/issues
-Changelog: https://github.com/aeonBTC/Mempal/releases
 
 AutoName: Mempal
 
+RepoType: git
+Repo: https://github.com/aeonBTC/Mempal.git
+Binaries: https://github.com/aeonBTC/Mempal/releases/download/v%v/mempal-v%v.apk
+
 Builds:
-  - versionName: 1.2.1
-    versionCode: 4
-    commit: 837b206b798f97025d8d0a9368d4c46e7bca3d77
-    subdir: app
-    gradle:
-      - yes
-
-  - versionName: 1.2.3
-    versionCode: 6
-    commit: 155ab19ce08c6d8afdafdf9ed4b323511d8ffb75
-    subdir: app
-    gradle:
-      - yes
-
-  - versionName: 1.3.0
-    versionCode: 7
-    commit: 0eb42540400f9a07773fc243035c00c60b960e76
-    subdir: app
-    gradle:
-      - yes
-
-  - versionName: 1.4.0
-    versionCode: 8
-    commit: acd145775945b9a37eb5019bae9af7cb48f9641b
-    subdir: app
-    gradle:
-      - yes
-
-  - versionName: 1.4.1
-    versionCode: 9
-    commit: 7280c4b0cb152d348893d4b4592acdf0f99be438
-    subdir: app
-    gradle:
-      - yes
-
-  - versionName: 1.4.2
-    versionCode: 10
-    commit: 6c383896335e8411be76a05c442b85313559bce3
-    subdir: app
-    gradle:
-      - yes
-      
-  - versionName: 1.4.3
-    versionCode: 11
+  - versionName: 1.5.0
+    versionCode: 12
     commit: e7c541ff61af02a4f7b9015ac049bd58aa764524
     subdir: app
     gradle:
       - yes
 
+AllowedAPKSigningKeys: 7129b3fdbe767b8fc081da85aac53a3030c71d51c4c73d9ff217b9053495f8de
+
 AutoUpdateMode: Version
 UpdateCheckMode: Tags
-CurrentVersion: 1.4.3
-CurrentVersionCode: 11
+CurrentVersion: 1.5.0
+CurrentVersionCode: 12
+
