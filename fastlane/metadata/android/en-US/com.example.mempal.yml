@@ -13,7 +13,7 @@ Binaries: https://github.com/aeonBTC/Mempal/releases/download/v%v/mempal-v%v.apk
 Builds:
   - versionName: 1.5.0
     versionCode: 12
-    commit: e7c541ff61af02a4f7b9015ac049bd58aa764524
+    commit: eda0516a5f5fed559b4d6d1aee441a8d27a9cf18
     subdir: app
     gradle:
       - yes
@@ -24,4 +24,3 @@ AutoUpdateMode: Version
 UpdateCheckMode: Tags
 CurrentVersion: 1.5.0
 CurrentVersionCode: 12
-
