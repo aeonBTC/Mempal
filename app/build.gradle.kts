@@ -5,14 +5,22 @@ plugins {
 
 android {
     namespace = "com.example.mempal"
+    
+    dependenciesInfo {
+        // Disables dependency metadata when building APKs.
+        includeInApk = false
+        // Disables dependency metadata when building Android App Bundles.
+        includeInBundle = false
+    }
+    
     compileSdk = 35
 
     defaultConfig {
         applicationId = "com.example.mempal"
         minSdk = 24
         targetSdk = 35
-        versionCode = 12
-        versionName = "1.5.0"
+        versionCode = 13
+        versionName = "1.5.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         multiDexEnabled = true
     }
