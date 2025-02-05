@@ -1,1 +1,2 @@
-- Minor bug fixes
+- Fixed minor color mismatch in combined widget.
+- Disabled APK dependency metadata
