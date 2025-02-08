@@ -2528,15 +2528,10 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                         expanded = expanded,
                         onDismissRequest = { expanded = false }
                     ) {
-                        listOf(15L, 30L, 45L, 60L).forEach { minutes ->
+                        listOf(5L, 15L, 30L, 45L).forEach { minutes ->
                             DropdownMenuItem(
                                 text = {
-                                    Text(
-                                        when (minutes) {
-                                            60L -> "1 hour"
-                                            else -> "$minutes minutes"
-                                        }
-                                    )
+                                    Text("$minutes minutes")
                                 },
                                 onClick = {
                                     updateFrequency = minutes
@@ -2551,10 +2546,7 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                 }
 
                 Text(
-                    text = when (updateFrequency) {
-                        60L -> "Widgets will auto-update every hour."
-                        else -> "Widgets will auto-update every $updateFrequency minutes."
-                    },
+                    text = "Widgets will auto-update every $updateFrequency minutes.",
                     style = MaterialTheme.typography.bodySmall,
                     color = AppColors.DataGray,
                     modifier = Modifier.padding(top = 4.dp, start = 12.dp)
