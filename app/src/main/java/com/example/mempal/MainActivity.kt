@@ -15,6 +15,7 @@ import androidx.activity.viewModels
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -56,6 +57,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.core.content.ContextCompat
@@ -63,6 +65,7 @@ import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
 import com.example.mempal.api.FeeRates
+import com.example.mempal.api.HashrateInfo
 import com.example.mempal.api.MempoolInfo
 import com.example.mempal.api.NetworkClient
 import com.example.mempal.cache.DashboardCache
@@ -80,8 +83,8 @@ import com.example.mempal.widget.WidgetUpdater
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.ceil
-import androidx.compose.foundation.interaction.MutableInteractionSource
 
 
 data class NotificationSectionConfig(
@@ -250,6 +253,9 @@ private fun MainScreen(viewModel: MainViewModel) {
     var selectedTab by remember { mutableIntStateOf(0) }
     val uiState by viewModel.uiState.collectAsState()
     val isInitialized by NetworkClient.isInitialized.collectAsState()
+    val context = LocalContext.current
+    val settingsRepository = remember { SettingsRepository.getInstance(context) }
+    var showWelcomeDialog by remember { mutableStateOf(settingsRepository.isFirstLaunch()) }
 
     // Effect to handle tab changes and periodic refresh
     LaunchedEffect(selectedTab) {
@@ -265,6 +271,15 @@ private fun MainScreen(viewModel: MainViewModel) {
                 }
             }
         }
+    }
+
+    if (showWelcomeDialog) {
+        WelcomeDialog(
+            onDismiss = {
+                showWelcomeDialog = false
+                settingsRepository.setFirstLaunchComplete()
+            }
+        )
     }
 
     Surface(
@@ -384,7 +399,7 @@ private fun AppHeader() {
                 .clickable {
                     try {
                         val currentUrl = settingsRepository.getApiUrl().trim()
-                        
+
                         // Check if it's an onion address
                         if (currentUrl.contains(".onion")) {
                             // Try Tor Browser first
@@ -392,13 +407,13 @@ private fun AppHeader() {
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 setPackage("org.torproject.torbrowser")
                             }
-                            
+
                             // Try Orbot Browser second
                             val orbotBrowserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(currentUrl)).apply {
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 setPackage("org.torproject.android")
                             }
-                            
+
                             try {
                                 if (torBrowserIntent.resolveActivity(context.packageManager) != null) {
                                     context.startActivity(torBrowserIntent)
@@ -422,7 +437,7 @@ private fun AppHeader() {
                             // Regular URL handling
                             val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(currentUrl))
                             browserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            
+
                             if (browserIntent.resolveActivity(context.packageManager) != null) {
                                 context.startActivity(browserIntent)
                             } else {
@@ -504,6 +519,7 @@ private fun MainContent(
     val blockTimestamp by viewModel.blockTimestamp.observeAsState()
     val feeRates by viewModel.feeRates.observeAsState()
     val mempoolInfo by viewModel.mempoolInfo.observeAsState()
+    val hashrateInfo by viewModel.hashrateInfo.observeAsState()
     val isInitialized = NetworkClient.isInitialized.collectAsState()
     val torManager = remember { TorManager.getInstance() }
     val torStatus by torManager.torStatus.collectAsState()
@@ -513,7 +529,7 @@ private fun MainContent(
 
     // Effect to refresh data when Tor connects and we're using an onion address
     LaunchedEffect(torStatus, isUsingOnion) {
-        if (isUsingOnion && torStatus == TorStatus.CONNECTED && 
+        if (isUsingOnion && torStatus == TorStatus.CONNECTED &&
             (blockHeight == null || feeRates == null || mempoolInfo == null)) {
             delay(100) // Small delay to ensure Tor circuit is ready
             viewModel.refreshData()
@@ -523,7 +539,7 @@ private fun MainContent(
     // Effect to periodically check and refresh if data is missing
     LaunchedEffect(Unit) {
         while (true) {
-            if (isUsingOnion && torStatus == TorStatus.CONNECTED && 
+            if (isUsingOnion && torStatus == TorStatus.CONNECTED &&
                 (blockHeight == null || feeRates == null || mempoolInfo == null)) {
                 viewModel.refreshData()
             }
@@ -535,47 +551,44 @@ private fun MainContent(
     val statusMessage = when {
         // If using onion and Tor is not connected
         isUsingOnion && torStatus != TorStatus.CONNECTED -> {
-            if (DashboardCache.hasCachedData()) "Waiting for Tor connection..." 
+            if (DashboardCache.hasCachedData()) "Waiting for Tor connection..."
             else "Connecting to Tor network..."
         }
-        
-        // If we're loading data
-        isInitialized.value && uiState is DashboardUiState.Loading -> "Fetching data..."
-        
+
         // If Tor is enabled and not connected or connecting
         torManager.isTorEnabled() && (!isInitialized.value || torStatus == TorStatus.CONNECTING) -> {
             if (DashboardCache.hasCachedData()) "Reconnecting to Tor network..."
             else "Connecting to Tor network..."
         }
-        
+
         // If not using Tor but network is not initialized
         !torManager.isTorEnabled() && !isInitialized.value -> {
             if (DashboardCache.hasCachedData()) "Reconnecting to server..."
             else "Connecting to server..."
         }
-        
+
         // For error states
         uiState is DashboardUiState.Error -> {
-            if (torManager.isTorEnabled() && 
+            if (torManager.isTorEnabled() &&
                 (uiState.message.contains("Connecting to Tor") || uiState.message.contains("Reconnecting to Tor"))) {
-                if (DashboardCache.hasCachedData()) "Reconnecting to Tor network..." 
+                if (DashboardCache.hasCachedData()) "Reconnecting to Tor network..."
                 else "Connecting to Tor network..."
             } else {
                 uiState.message
             }
         }
-        
+
         // For success states with cache
         uiState is DashboardUiState.Success && uiState.isCache -> {
             if (torManager.isTorEnabled()) {
-                if (DashboardCache.hasCachedData()) "Reconnecting to Tor network..." 
+                if (DashboardCache.hasCachedData()) "Reconnecting to Tor network..."
                 else "Connecting to Tor network..."
             } else {
-                if (DashboardCache.hasCachedData()) "Reconnecting to server..." 
+                if (DashboardCache.hasCachedData()) "Reconnecting to server..."
                 else "Connecting to server..."
             }
         }
-        
+
         // No message for other states
         else -> null
     }
@@ -587,6 +600,7 @@ private fun MainContent(
                 blockTimestamp = blockTimestamp,
                 feeRates = feeRates,
                 mempoolInfo = mempoolInfo,
+                hashrateInfo = hashrateInfo,
                 modifier = modifier,
                 viewModel = viewModel,
                 statusMessage = statusMessage
@@ -598,6 +612,7 @@ private fun MainContent(
                 blockTimestamp = blockTimestamp,
                 feeRates = feeRates,
                 mempoolInfo = mempoolInfo,
+                hashrateInfo = hashrateInfo,
                 modifier = modifier,
                 viewModel = viewModel,
                 statusMessage = statusMessage
@@ -609,6 +624,7 @@ private fun MainContent(
                 blockTimestamp = blockTimestamp,
                 feeRates = feeRates,
                 mempoolInfo = mempoolInfo,
+                hashrateInfo = hashrateInfo,
                 modifier = modifier,
                 viewModel = viewModel,
                 statusMessage = statusMessage
@@ -623,6 +639,7 @@ private fun MainContentDisplay(
     blockTimestamp: Long?,
     feeRates: FeeRates?,
     mempoolInfo: MempoolInfo?,
+    hashrateInfo: HashrateInfo?,
     modifier: Modifier = Modifier,
     viewModel: MainViewModel? = null,
     statusMessage: String? = null
@@ -658,14 +675,6 @@ private fun MainContentDisplay(
     // Update visible cards when they change in settings
     LaunchedEffect(Unit) {
         visibleCards = settingsRepository.getVisibleCards()
-    }
-    
-    // Remember the warning tooltip state
-    val warningTooltip = remember(mempoolInfo) {
-        if (mempoolInfo?.isUsingFallbackHistogram == true) {
-            "Your custom server doesn't provide fee distribution data. " +
-            "We're using mempool.space as a fallback source for this information."
-        } else null
     }
 
     Column(
@@ -723,7 +732,7 @@ private fun MainContentDisplay(
                             blockTimestamp?.let { timestamp ->
                                 val elapsedMinutes = (System.currentTimeMillis() / 1000 - timestamp) / 60
                                 Text(
-                                    text = "(${elapsedMinutes} ${if (elapsedMinutes == 1L) "minute" else "minutes"} ago)",
+                                    text = "$elapsedMinutes ${if (elapsedMinutes == 1L) "minute" else "minutes"} ago",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = AppColors.DataGray.copy(alpha = 0.7f)
                                 )
@@ -732,6 +741,79 @@ private fun MainContentDisplay(
                     }
                 },
                 isLoading = blockHeight == null,
+                onRefresh = refreshAll,
+                isRefreshing = isRefreshing || isMainRefreshing
+            )
+        }
+
+        if ("Hashrate" in visibleCards) {
+            DataCard(
+                title = "Hashrate",
+                icon = Icons.Default.Memory,
+                content = {
+                    if (hashrateInfo != null) {
+                        Column {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = formatHashrate(hashrateInfo.currentHashrate),
+                                    style = MaterialTheme.typography.headlineLarge,
+                                    color = AppColors.DataGray
+                                )
+                            }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = "Difficulty: ${formatDifficulty(hashrateInfo.currentDifficulty)}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = AppColors.DataGray.copy(alpha = 0.7f)
+                                )
+                                // Difficulty Adjustment Info
+                                viewModel?.difficultyAdjustment?.value?.let { adjustment ->
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(0.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = if (adjustment.difficultyChange >= 0) Icons.Default.ArrowUpward else Icons.Default.ArrowDownward,
+                                                contentDescription = if (adjustment.difficultyChange >= 0) "Difficulty increasing" else "Difficulty decreasing",
+                                                tint = if (adjustment.difficultyChange >= 0) Color(0xFF4CAF50) else Color(0xFFE57373),
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Text(
+                                                text = String.format(Locale.getDefault(), "%.2f%%", abs(adjustment.difficultyChange)),
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = if (adjustment.difficultyChange >= 0) Color(0xFF4CAF50) else Color(0xFFE57373)
+                                            )
+                                        }
+                                        Text(
+                                            text = "in " + String.format(Locale.US, "%,d", adjustment.remainingBlocks) + " blocks",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = AppColors.DataGray.copy(alpha = 0.7f)
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        Text(
+                            text = "Loading...",
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = AppColors.DataGray.copy(alpha = 0.6f)
+                        )
+                    }
+                },
+                isLoading = hashrateInfo == null,
                 onRefresh = refreshAll,
                 isRefreshing = isRefreshing || isMainRefreshing
             )
@@ -751,7 +833,7 @@ private fun MainContentDisplay(
                             )
                             val blocksToClean = ceil(it.vsize / 1_000_000.0 / 1.5).toInt()
                             Text(
-                                text = "(${blocksToClean} ${if (blocksToClean == 1) "block" else "blocks"} to clear)",
+                                text = "$blocksToClean ${if (blocksToClean == 1) "block" else "blocks"} to clear",
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = AppColors.DataGray.copy(alpha = 0.7f)
                             )
@@ -791,7 +873,10 @@ private fun MainContentDisplay(
                         "\n- Yellow might confirm in the next block." +
                         "\n- Red will not confirm in the next block." +
                         "\n\nNOTE: Each Bitcoin block confirms about 1.5 vMB worth of transactions.",
-                warningTooltip = warningTooltip,
+                warningTooltip = if (mempoolInfo?.isUsingFallbackHistogram == true) {
+                    "Your custom server doesn't provide fee distribution data. " +
+                            "We're using mempool.space as a fallback source for this information."
+                } else null,
                 isLoading = mempoolInfo == null,
                 onRefresh = refreshAll,
                 isRefreshing = isRefreshing || isMainRefreshing
@@ -975,7 +1060,7 @@ private fun FeeRateRow(
 private fun HistogramContent(mempoolInfo: MempoolInfo) {
     // Remember the last valid histogram data
     var lastValidHistogram by remember { mutableStateOf<List<List<Double>>>(emptyList()) }
-    
+
     // Update last valid histogram when we get new data
     LaunchedEffect(mempoolInfo.feeHistogram) {
         if (mempoolInfo.feeHistogram.isNotEmpty()) {
@@ -1227,9 +1312,9 @@ private fun NotificationsScreen(
             // Check if any notifications are enabled
             val isAnyEnabled = settings.run {
                 blockNotificationsEnabled && (newBlockNotificationEnabled || specificBlockNotificationEnabled) ||
-                mempoolSizeNotificationsEnabled ||
-                feeRatesNotificationsEnabled ||
-                (txConfirmationEnabled && transactionId.isNotEmpty())
+                        mempoolSizeNotificationsEnabled ||
+                        feeRatesNotificationsEnabled ||
+                        (txConfirmationEnabled && transactionId.isNotEmpty())
             }
 
             // If no notifications are enabled but service is running, stop it
@@ -1916,11 +2001,11 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
     val torStatus by torManager.torStatus.collectAsState()
     var torEnabled by remember { mutableStateOf(torManager.isTorEnabled()) }
     var updateFrequency by remember { mutableLongStateOf(settingsRepository.getUpdateFrequency()) }
-    
+
     // Track initial values
     val initialTorEnabled = rememberSaveable { torManager.isTorEnabled() }
     val initialApiUrl = rememberSaveable { settingsRepository.getApiUrl() }
-    
+
     var selectedOption by remember {
         mutableIntStateOf(
             if (settingsRepository.getApiUrl() == "https://mempool.space") 0 else 1
@@ -1929,7 +2014,7 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
     val initialSelectedOption = rememberSaveable {
         if (settingsRepository.getApiUrl() == "https://mempool.space") 0 else 1
     }
-    
+
     var customUrl by remember {
         mutableStateOf(
             if (settingsRepository.getApiUrl() != "https://mempool.space")
@@ -2058,19 +2143,19 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
 
                     if (selectedOption == 1) {
                         var isDropdownExpanded by remember { mutableStateOf(false) }
-                        
+
                         // Function to check if URL is mempool.space
                         fun isDefaultServer(url: String): Boolean {
                             val trimmed = url.trim()
-                            return trimmed == "mempool.space" || 
-                                   trimmed == "mempool.space/" ||
-                                   trimmed == "https://mempool.space" || 
-                                   trimmed == "https://mempool.space/"
+                            return trimmed == "mempool.space" ||
+                                    trimmed == "mempool.space/" ||
+                                    trimmed == "https://mempool.space" ||
+                                    trimmed == "https://mempool.space/"
                         }
 
                         ExposedDropdownMenuBox(
                             expanded = isDropdownExpanded,
-                            onExpandedChange = { newValue -> 
+                            onExpandedChange = { newValue ->
                                 // Only allow auto-collapse, not auto-expand
                                 if (!newValue) isDropdownExpanded = false
                             },
@@ -2104,8 +2189,8 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                                 isError = showUrlError,
                                 supportingText = if (showUrlError) {
                                     { Text(
-                                        text = if (isDefaultServer(customUrl)) 
-                                            "Use default server option instead" 
+                                        text = if (isDefaultServer(customUrl))
+                                            "Use default server option instead"
                                         else "URL must start with http:// or https://",
                                         color = MaterialTheme.colorScheme.error
                                     ) }
@@ -2225,7 +2310,7 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                         }
 
                         LaunchedEffect(customUrl, selectedOption, torEnabled, torStatus) {
-                            if (selectedOption == 1 && customUrl.isNotEmpty() && 
+                            if (selectedOption == 1 && customUrl.isNotEmpty() &&
                                 (customUrl.startsWith("http://") || customUrl.startsWith("https://"))) {
                                 isTestingConnection = true
                                 // Wait for changes before testing - longer delay for .onion addresses
@@ -2254,8 +2339,8 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
                     Column {
                         Text(
@@ -2331,8 +2416,8 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                             }
                             handleSave()
                         },
-                        enabled = hasServerSettingsChanged && 
-                            !(torEnabled && torStatus != TorStatus.CONNECTED), // Disable if Tor is enabled but not connected
+                        enabled = hasServerSettingsChanged &&
+                                !(torEnabled && torStatus != TorStatus.CONNECTED), // Disable if Tor is enabled but not connected
                         colors = ButtonDefaults.buttonColors(
                             containerColor = AppColors.Orange,
                             disabledContainerColor = AppColors.Orange.copy(alpha = 0.5f)
@@ -2340,9 +2425,9 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            text = if (torEnabled && torStatus != TorStatus.CONNECTED) 
-                                "Waiting for Tor..." 
-                            else 
+                            text = if (torEnabled && torStatus != TorStatus.CONNECTED)
+                                "Waiting for Tor..."
+                            else
                                 "Save"
                         )
                     }
@@ -2357,9 +2442,9 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
             )
         ) {
             Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(16.dp)
             ) {
                 Row(
                     verticalAlignment = Alignment.CenterVertically
@@ -2504,22 +2589,20 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                 ) {
                     OutlinedTextField(
                         value = when (updateFrequency) {
+                            15L -> "15 minutes"
+                            30L -> "30 minutes"
                             60L -> "1 hour"
-                            180L -> "3 hours"
-                            360L -> "6 hours"
-                            else -> "$updateFrequency minutes"
+                            120L -> "2 hours"
+                            240L -> "4 hours"
+                            else -> "30 minutes"
                         },
                         onValueChange = {},
                         readOnly = true,
-                        label = { Text("Update Interval") },
+                        label = { Text("Update frequency") },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor()
-                            .padding(top = 16.dp),
+                        modifier = Modifier.menuAnchor(),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = AppColors.Orange,
-                            unfocusedBorderColor = AppColors.DataGray,
                             focusedLabelColor = AppColors.Orange
                         )
                     )
@@ -2528,10 +2611,16 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                         expanded = expanded,
                         onDismissRequest = { expanded = false }
                     ) {
-                        listOf(5L, 15L, 30L, 45L).forEach { minutes ->
+                        listOf(15L, 30L, 60L, 120L, 240L).forEach { minutes ->
                             DropdownMenuItem(
                                 text = {
-                                    Text("$minutes minutes")
+                                    Text(when (minutes) {
+                                        15L -> "15 minutes"
+                                        30L -> "30 minutes"
+                                        60L -> "1 hour"
+                                        120L -> "2 hours"
+                                        else -> "4 hours"
+                                    })
                                 },
                                 onClick = {
                                     updateFrequency = minutes
@@ -2574,7 +2663,7 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                 Spacer(modifier = Modifier.height(8.dp))
 
                 // List of available cards
-                val availableCards = listOf("Block Height", "Mempool Size", "Fee Rates", "Fee Distribution")
+                val availableCards = listOf("Block Height", "Hashrate", "Mempool Size", "Fee Rates", "Fee Distribution")
 
                 availableCards.forEach { cardName ->
                     Card(
@@ -2604,9 +2693,9 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                             Text(
                                 text = cardName,
                                 style = MaterialTheme.typography.bodyLarge,
-                                color = if (cardName in visibleCards) 
+                                color = if (cardName in visibleCards)
                                     AppColors.DataGray
-                                else 
+                                else
                                     AppColors.DataGray.copy(alpha = 0.5f)
                             )
                             Checkbox(
@@ -2817,4 +2906,116 @@ private fun NumericTextField(
             focusedTextColor = AppColors.Orange
         )
     )
+}
+
+@Composable
+private fun WelcomeDialog(onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "Welcome to Mempal",
+                    style = MaterialTheme.typography.headlineSmall,
+                    textAlign = TextAlign.Center
+                )
+                Text(
+                    text = "Some quick tips to get you started!",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = Color.White,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.padding(top = 8.dp)
+                )
+            }
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .fillMaxWidth()
+                    .padding(vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                // Dashboard tips
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = "Dashboard:",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AppColors.Orange,
+                        textAlign = TextAlign.Center
+                    )
+                    Text(
+                        text = "•Tap dashboard anywhere to refresh.\n•Tap logo to open block explorer.",
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+
+                // Widget tips
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
+                    Text(
+                        text = "Widgets:",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AppColors.Orange,
+                        textAlign = TextAlign.Center
+                    )
+                    Text(
+                        text = "•Tap any widget to refresh data.\n•Double tap widget to open Mempal app.",
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onDismiss,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = AppColors.Orange
+                ),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text("Got it!")
+            }
+        }
+    )
+}
+
+// Add this function near the top of the file, after the imports
+private fun formatHashrate(hashrate: Double): String {
+    val units = arrayOf("H/s", "KH/s", "MH/s", "GH/s", "TH/s", "PH/s", "EH/s", "ZH/s")
+    var value = hashrate
+    var unitIndex = 0
+
+    while (value >= 1000 && unitIndex < units.size - 1) {
+        value /= 1000
+        unitIndex++
+    }
+
+    return String.format(Locale.US, "%.2f %s", value, units[unitIndex])
+}
+
+private fun formatDifficulty(difficulty: Double): String {
+    val units = arrayOf("", "K", "M", "G", "T", "P", "E", "Z")
+    var value = difficulty
+    var unitIndex = 0
+
+    while (value >= 1000 && unitIndex < units.size - 1) {
+        value /= 1000
+        unitIndex++
+    }
+
+    return String.format(Locale.US, "%.2f %s", value, units[unitIndex])
 }
