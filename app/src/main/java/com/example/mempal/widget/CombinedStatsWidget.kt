@@ -140,12 +140,12 @@ class CombinedStatsWidget : AppWidgetProvider() {
                             // Add blocks to clear calculation
                             val blocksToClean = ceil(sizeInMB / 1.5).toInt()
                             views.setTextViewText(R.id.mempool_blocks_to_clear,
-                                "(${blocksToClean} ${if (blocksToClean == 1) "block" else "blocks"} to clear)")
+                                "$blocksToClean ${if (blocksToClean == 1) "block" else "blocks"} to clear")
                             
                             // Update fee rates
-                            views.setTextViewText(R.id.priority_fee, "${feeRates.fastestFee}")
-                            views.setTextViewText(R.id.standard_fee, "${feeRates.halfHourFee}")
-                            views.setTextViewText(R.id.economy_fee, "${feeRates.hourFee}")
+                            views.setTextViewText(R.id.priority_fee, "${feeRates.fastestFee} ")
+                            views.setTextViewText(R.id.standard_fee, "${feeRates.halfHourFee} ")
+                            views.setTextViewText(R.id.economy_fee, "${feeRates.hourFee} ")
                             
                             // Try to get block timestamp
                             try {
@@ -158,7 +158,7 @@ class CombinedStatsWidget : AppWidgetProvider() {
                                             blockInfoResponse.body()?.timestamp?.let { timestamp ->
                                                 val elapsedMinutes = (System.currentTimeMillis() / 1000 - timestamp) / 60
                                                 views.setTextViewText(R.id.elapsed_time, 
-                                                    "(${elapsedMinutes} ${if (elapsedMinutes == 1L) "minute" else "minutes"} ago)")
+                                                    "$elapsedMinutes ${if (elapsedMinutes == 1L) "minute" else "minutes"} ago")
                                             }
                                         }
                                     }

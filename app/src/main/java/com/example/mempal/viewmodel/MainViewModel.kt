@@ -4,10 +4,7 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.mempal.api.FeeRates
-import com.example.mempal.api.MempoolApi
-import com.example.mempal.api.MempoolInfo
-import com.example.mempal.api.NetworkClient
+import com.example.mempal.api.*
 import com.example.mempal.cache.DashboardCache
 import com.example.mempal.tor.TorManager
 import com.example.mempal.tor.TorStatus
@@ -30,23 +27,29 @@ sealed class DashboardUiState {
 }
 
 class MainViewModel : ViewModel() {
-    private val _uiState = MutableStateFlow<DashboardUiState>(DashboardUiState.Loading)
-    val uiState: StateFlow<DashboardUiState> = _uiState
+    private val _blockHeight = MutableLiveData<Int?>()
+    val blockHeight: LiveData<Int?> = _blockHeight
+
+    private val _blockTimestamp = MutableLiveData<Long?>()
+    val blockTimestamp: LiveData<Long?> = _blockTimestamp
+
+    private val _feeRates = MutableLiveData<FeeRates?>()
+    val feeRates: LiveData<FeeRates?> = _feeRates
+
+    private val _mempoolInfo = MutableLiveData<MempoolInfo?>()
+    val mempoolInfo: LiveData<MempoolInfo?> = _mempoolInfo
+
+    private val _hashrateInfo = MutableLiveData<HashrateInfo>()
+    val hashrateInfo: LiveData<HashrateInfo> = _hashrateInfo
+
+    private val _difficultyAdjustment = MutableLiveData<DifficultyAdjustment>()
+    val difficultyAdjustment: LiveData<DifficultyAdjustment> = _difficultyAdjustment
 
     private val _isMainRefreshing = MutableStateFlow(false)
     val isMainRefreshing: StateFlow<Boolean> = _isMainRefreshing
 
-    private val _blockHeight = MutableLiveData<Int?>(null)
-    val blockHeight: LiveData<Int?> = _blockHeight
-
-    private val _blockTimestamp = MutableLiveData<Long?>(null)
-    val blockTimestamp: LiveData<Long?> = _blockTimestamp
-
-    private val _feeRates = MutableLiveData<FeeRates?>(null)
-    val feeRates: LiveData<FeeRates?> = _feeRates
-
-    private val _mempoolInfo = MutableLiveData<MempoolInfo?>(null)
-    val mempoolInfo: LiveData<MempoolInfo?> = _mempoolInfo
+    private val _uiState = MutableStateFlow<DashboardUiState>(DashboardUiState.Loading)
+    val uiState: StateFlow<DashboardUiState> = _uiState
 
     var hasInitialData = false
         private set
@@ -242,8 +245,18 @@ class MainViewModel : ViewModel() {
                                         if (mempoolInfo.needsHistogramFallback() || serverNeedsFallback) {
                                             serverNeedsFallback = true
                                             try {
-                                                withTimeout(timeoutMillis) {
-                                                    val fallbackClient = NetworkClient.createTestClient(MempoolApi.BASE_URL)
+                                                val torManager = TorManager.getInstance()
+                                                val isUsingTor = torManager.isTorEnabled() && torManager.torStatus.value == TorStatus.CONNECTED
+                                                withTimeout(if (isUsingTor) 30000L else 5000L) {
+                                                    val fallbackUrl = if (isUsingTor) {
+                                                        MempoolApi.ONION_BASE_URL
+                                                    } else {
+                                                        MempoolApi.BASE_URL
+                                                    }
+                                                    val fallbackClient = NetworkClient.createTestClient(
+                                                        baseUrl = fallbackUrl,
+                                                        useTor = isUsingTor
+                                                    )
                                                     val fallbackResponse = fallbackClient.getMempoolInfo()
                                                     if (fallbackResponse.isSuccessful && fallbackResponse.body() != null) {
                                                         val fallbackInfo = fallbackResponse.body()!!
@@ -421,10 +434,106 @@ class MainViewModel : ViewModel() {
         }
     }
 
-    // Manual refresh for dashboard
+    // Updated refreshData function with type-safe handling
     fun refreshData() {
+        viewModelScope.launch {
+            _uiState.value = DashboardUiState.Loading
         _isMainRefreshing.value = true
-        refreshDashboardData()
+
+            try {
+                // Create separate async calls with explicit types
+                val blockHeightDeferred = async { NetworkClient.mempoolApi.getBlockHeight() }
+                val mempoolInfoDeferred = async { NetworkClient.mempoolApi.getMempoolInfo() }
+                val feeRatesDeferred = async { NetworkClient.mempoolApi.getFeeRates() }
+                val hashrateInfoDeferred = async { NetworkClient.mempoolApi.getHashrateInfo() }
+                val difficultyAdjustmentDeferred = async { NetworkClient.mempoolApi.getDifficultyAdjustment() }
+                
+                // Get block hash and info in parallel
+                val blockHashDeferred = async { NetworkClient.mempoolApi.getLatestBlockHash() }
+                val blockHashResponse = blockHashDeferred.await()
+                val blockInfoDeferred = if (blockHashResponse.isSuccessful) {
+                    blockHashResponse.body()?.let { hash ->
+                        async { NetworkClient.mempoolApi.getBlockInfo(hash) }
+                    }
+                } else null
+
+                // Await all responses with proper typing
+                val blockHeightResponse = blockHeightDeferred.await()
+                val mempoolInfoResponse = mempoolInfoDeferred.await()
+                val feeRatesResponse = feeRatesDeferred.await()
+                val hashrateInfoResponse = hashrateInfoDeferred.await()
+                val difficultyAdjustmentResponse = difficultyAdjustmentDeferred.await()
+                val blockInfoResponse = blockInfoDeferred?.await()
+
+                if (blockHeightResponse.isSuccessful && 
+                    mempoolInfoResponse.isSuccessful && 
+                    feeRatesResponse.isSuccessful && 
+                    hashrateInfoResponse.isSuccessful &&
+                    difficultyAdjustmentResponse.isSuccessful) {
+                    
+                    // Process responses
+                    blockHeightResponse.body()?.let { height -> _blockHeight.value = height }
+                    
+                    // Process block timestamp
+                    blockInfoResponse?.let { response ->
+                        if (response.isSuccessful) {
+                            response.body()?.timestamp?.let { timestamp ->
+                                _blockTimestamp.value = timestamp
+                            }
+                        }
+                    }
+
+                    feeRatesResponse.body()?.let { rates -> _feeRates.value = rates }
+                    hashrateInfoResponse.body()?.let { info -> _hashrateInfo.value = info }
+                    difficultyAdjustmentResponse.body()?.let { adjustment -> _difficultyAdjustment.value = adjustment }
+
+                    // Handle mempool info with fallback logic
+                    mempoolInfoResponse.body()?.let { mempoolInfo ->
+                        _mempoolInfo.value = mempoolInfo
+                        
+                        // Check if we need fallback data
+                        if (mempoolInfo.needsHistogramFallback() || serverNeedsFallback) {
+                            serverNeedsFallback = true
+                            try {
+                                val torManager = TorManager.getInstance()
+                                val isUsingTor = torManager.isTorEnabled() && torManager.torStatus.value == TorStatus.CONNECTED
+                                withTimeout(if (isUsingTor) 30000L else 5000L) {
+                                    val fallbackUrl = if (isUsingTor) {
+                                        MempoolApi.ONION_BASE_URL
+                                    } else {
+                                        MempoolApi.BASE_URL
+                                    }
+                                    val fallbackClient = NetworkClient.createTestClient(
+                                        baseUrl = fallbackUrl,
+                                        useTor = isUsingTor
+                                    )
+                                    val fallbackResponse = fallbackClient.getMempoolInfo()
+                                    if (fallbackResponse.isSuccessful && fallbackResponse.body() != null) {
+                                        val fallbackInfo = fallbackResponse.body()!!
+                                        if (!fallbackInfo.needsHistogramFallback()) {
+                                            _mempoolInfo.value = mempoolInfo.copy(
+                                                feeHistogram = fallbackInfo.feeHistogram,
+                                                isUsingFallbackHistogram = true
+                                            )
+                                        }
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                println("Non-critical error fetching fallback data: ${e.message}")
+                            }
+                        }
+                    }
+
+                    _uiState.value = DashboardUiState.Success(isCache = false)
+                } else {
+                    _uiState.value = DashboardUiState.Error("Failed to fetch data")
+                }
+            } catch (e: Exception) {
+                _uiState.value = DashboardUiState.Error(e.localizedMessage ?: "Unknown error")
+            } finally {
+                _isMainRefreshing.value = false
+            }
+        }
     }
 
     private fun handleError() {

@@ -121,7 +121,7 @@ class MempoolSizeWidget : AppWidgetProvider() {
                                 
                             val blocksToClean = ceil(sizeInMB / 1.5).toInt()
                             views.setTextViewText(R.id.mempool_blocks_to_clear,
-                                "(${blocksToClean} ${if (blocksToClean == 1) "block" else "blocks"} to clear)")
+                                "$blocksToClean ${if (blocksToClean == 1) "block" else "blocks"} to clear")
                             
                             appWidgetManager.updateAppWidget(appWidgetId, views)
                             return@launch

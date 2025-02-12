@@ -1,3 +1,5 @@
+@file:Suppress("PropertyName")
+
 package com.example.mempal.api
 
 import retrofit2.Response
@@ -23,8 +25,15 @@ interface MempoolApi {
     @GET("api/tx/{txid}")
     suspend fun getTransaction(@Path("txid") txid: String): Response<TransactionResponse>
 
+    @GET("api/v1/mining/hashrate/3d")
+    suspend fun getHashrateInfo(): Response<HashrateInfo>
+
+    @GET("api/v1/difficulty-adjustment")
+    suspend fun getDifficultyAdjustment(): Response<DifficultyAdjustment>
+
     companion object {
         const val BASE_URL = "https://mempool.space/"
+        const val ONION_BASE_URL = "http://mempoolhqx4isw62xs7abwphsq7ldayuidyx2v2oethdhhj6mlo2r6ad.onion/"
     }
 }
 
@@ -44,4 +53,13 @@ data class BlockInfo(
     val id: String,
     val height: Int,
     val timestamp: Long
+)
+
+data class DifficultyAdjustment(
+    val progressPercent: Double,
+    val difficultyChange: Double,
+    val estimatedRetargetDate: Long,
+    val remainingBlocks: Int,
+    val remainingTime: Long,
+    val previousRetarget: Double
 )

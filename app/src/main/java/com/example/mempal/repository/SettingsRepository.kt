@@ -24,7 +24,7 @@ class SettingsRepository private constructor(context: Context) {
         private const val KEY_API_URL = "api_url"
         private const val KEY_UPDATE_FREQUENCY = "widget_update_frequency"
         private const val DEFAULT_API_URL = "https://mempool.space"
-        private const val DEFAULT_UPDATE_FREQUENCY = 15L // 15 minutes
+        private const val DEFAULT_UPDATE_FREQUENCY = 30L // 30 minutes
         private const val KEY_NOTIFICATION_TIME_UNIT = "notification_time_unit"
         private const val DEFAULT_TIME_UNIT = "minutes"
         private const val KEY_SERVER_NEEDS_RESTART = "server_needs_restart"
@@ -52,7 +52,14 @@ class SettingsRepository private constructor(context: Context) {
         private const val KEY_TRANSACTION_ID = "transaction_id"
 
         private const val KEY_VISIBLE_CARDS = "visible_cards"
-        private val DEFAULT_VISIBLE_CARDS = setOf("Block Height", "Mempool Size", "Fee Rates", "Fee Distribution")
+        private val DEFAULT_VISIBLE_CARDS = setOf(
+            "Block Height",
+            "Hashrate",
+            "Mempool Size",
+            "Fee Rates",
+            "Fee Distribution"
+        )
+        private const val KEY_IS_FIRST_LAUNCH = "is_first_launch"
 
         fun getInstance(context: Context): SettingsRepository {
             val currentInstance = instance?.get()
@@ -179,6 +186,14 @@ class SettingsRepository private constructor(context: Context) {
         val currentServers = getSavedServers().toMutableSet()
         currentServers.remove(url)
         prefs.edit().putStringSet(KEY_SAVED_SERVERS, currentServers).apply()
+    }
+
+    fun isFirstLaunch(): Boolean {
+        return prefs.getBoolean(KEY_IS_FIRST_LAUNCH, true)
+    }
+
+    fun setFirstLaunchComplete() {
+        prefs.edit().putBoolean(KEY_IS_FIRST_LAUNCH, false).apply()
     }
 
     fun getVisibleCards(): Set<String> {

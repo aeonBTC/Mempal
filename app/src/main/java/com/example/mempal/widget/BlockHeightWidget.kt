@@ -131,7 +131,7 @@ class BlockHeightWidget : AppWidgetProvider() {
                                             blockInfoResponse.body()?.timestamp?.let { timestamp ->
                                                 val elapsedMinutes = (System.currentTimeMillis() / 1000 - timestamp) / 60
                                                 views.setTextViewText(R.id.elapsed_time, 
-                                                    "(${elapsedMinutes} ${if (elapsedMinutes == 1L) "minute" else "minutes"} ago)")
+                                                    "$elapsedMinutes ${if (elapsedMinutes == 1L) "minute" else "minutes"} ago")
                                             }
                                         }
                                     }

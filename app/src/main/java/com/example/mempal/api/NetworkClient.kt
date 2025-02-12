@@ -20,10 +20,10 @@ import java.lang.ref.WeakReference
 import java.util.concurrent.TimeUnit
 
 object NetworkClient {
-    private const val TIMEOUT_SECONDS = 5L
-    private const val TEST_TIMEOUT_SECONDS = 3L
-    private const val ONION_TEST_TIMEOUT_SECONDS = 45L
-    private const val TOR_TIMEOUT_SECONDS = 15L
+    private const val TIMEOUT_SECONDS = 10L
+    private const val TEST_TIMEOUT_SECONDS = 10L
+    private const val ONION_TEST_TIMEOUT_SECONDS = 60L
+    private const val TOR_TIMEOUT_SECONDS = 60L
     private const val MAX_PARALLEL_CONNECTIONS = 5
     private const val TOR_MAX_IDLE_CONNECTIONS = 5
 
