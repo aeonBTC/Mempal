@@ -2593,7 +2593,6 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                             30L -> "30 minutes"
                             60L -> "1 hour"
                             120L -> "2 hours"
-                            240L -> "4 hours"
                             else -> "30 minutes"
                         },
                         onValueChange = {},
@@ -2611,15 +2610,14 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                         expanded = expanded,
                         onDismissRequest = { expanded = false }
                     ) {
-                        listOf(15L, 30L, 60L, 120L, 240L).forEach { minutes ->
+                        listOf(15L, 30L, 60L, 120L).forEach { minutes ->
                             DropdownMenuItem(
                                 text = {
                                     Text(when (minutes) {
                                         15L -> "15 minutes"
                                         30L -> "30 minutes"
                                         60L -> "1 hour"
-                                        120L -> "2 hours"
-                                        else -> "4 hours"
+                                        else -> "2 hours"
                                     })
                                 },
                                 onClick = {
