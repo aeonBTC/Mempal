@@ -1,0 +1,4 @@
+- Added welcome screen with quick tips.
+- Added hashrate, difficulty, and adjustments to dashboard.
+- Modified widget auto-refresh intervals.
+- Fixed versioning mismatch.
