@@ -3,7 +3,7 @@
 
 ![screens](https://github.com/user-attachments/assets/db06e32d-9a03-421c-ba9b-0584c00c7dec)
 
-<!--[<img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png" alt="Get it on F-Droid" height="80">]()-->
+[<img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png" alt="Get it on F-Droid" height="80">](https://f-droid.org/en/packages/com.example.mempal/)
 [<img src="https://user-images.githubusercontent.com/663460/26973090-f8fdc986-4d14-11e7-995a-e7c5e79ed925.png" alt="Get APK from GitHub" height="80">](https://github.com/aeonBTC/Mempal/releases)
 
 ### Mempal is a Bitcoin network monitoring app that allows users to effortlessly track block height, fee rates, and mempool depth, in order to optimize transactions and manage fees.
