@@ -1,5 +1,3 @@
-<b><u>Mempal</u></b>
-<br><br>
 Mempal is a Bitcoin network monitoring app that allows users to effortlessly track block height, fee rates, and mempool depth, in order to optimize transactions and manage fees.
 <br>
 <b>Key Features</b>
