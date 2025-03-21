@@ -1,13 +1,13 @@
-Mempal is a Bitcoin network monitoring app that allows users to effortlessly track block height, fee rates, and mempool depth, in order to optimize transactions and manage fees.
+Mempal is a Bitcoin network monitoring app that allows users to effortlessly track key network metrics, including block height, fee rates, hashrate, and mempool size & depth. Mempal is an essential tool for users who want to optimize their transactions and track fee rates.
 <br>
 <b>Key Features</b>
 <br>
-<b>Detailed Mempool Insights:</b> Mempal provides in-depth information about the current state of the Bitcoin mempool, including current size of the mempool, transaction fee rates, and fee distribution. This allows users to gauge network congestion and make informed decisions regarding transaction fees.
+<b>Detailed Mempool Insights:</b> Mempal provides in-depth information about the current state of the Bitcoin network, including current block height, hashrate, mempool size, fee rates, and fee distribution. This allows users to gauge network congestion and make informed decisions regarding transaction fees.
 <br>
-<b>Real-Time Notifications:</b> Users can tailor their notification settings to receive alerts when transaction fees drop below a specified threshold, when a specific transaction is confirmed, or when new blocks are mined.
+<b>Real-Time Notifications:</b> Users can tailor their notification settings to receive alerts when transaction fees drop below a specified threshold, when a specific TXID is confirmed, or when new blocks are mined.
 <br>
-<b>Custom Servers:</b> Connect to a self hosted mempool server so you don't have to rely on any middlemen to receive information about the Bitcoin network.
+<b>Custom Servers:</b> Connect Mempal to a self-hosted mempool server so you don't have to rely on trusted third parties to obtain information about the Bitcoin network.
 <br>
-<b>Tor Integration:</b> Use Tor to preserve your privacy and easily connect to .onion mempool servers. 
+<b>Tor Integration:</b> Enable Tor to preserve your privacy and connect to .onion mempool servers.
 <br>
-<b>Widgets:</b> Receive up-to-date information about fees, blocks, and mempool size right on your home screen.
+<b>Widgets:</b> Receive quick and up-to-date information about fee rates, block sizes, and mempool sizes.
