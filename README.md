@@ -18,4 +18,4 @@ Key Features:
 
 * **Tor Integration:** Enable Tor to preserve your privacy and connect to .onion mempool servers. 
 
-* **Widgets:** Receive quick up-to-date information about fees, blocks, and mempool size.
+* **Widgets:** Receive quick and up-to-date information about fee rates, block sizes, and mempool sizes.
