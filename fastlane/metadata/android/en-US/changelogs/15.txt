@@ -1,0 +1,4 @@
+- Added swipe-down feature to refresh dashboard.
+- Added custom time option for widget auto-update frequency.
+- Fixed widget refresh bug when Android battery/data saver mode is enabled.
+- Various optimization and bug fixes.
