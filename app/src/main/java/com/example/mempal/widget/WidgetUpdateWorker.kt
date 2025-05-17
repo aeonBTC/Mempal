@@ -7,6 +7,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.os.PowerManager
+import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
 import kotlinx.coroutines.*
@@ -15,32 +16,85 @@ class WidgetUpdateWorker(
     private val appContext: Context,
     params: WorkerParameters
 ) : CoroutineWorker(appContext, params) {
+    private val tag = "WidgetUpdateWorker"
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
         var wakeLock: PowerManager.WakeLock? = null
         try {
-            // Acquire wake lock
+            // Initialize important services that would normally be initialized by the app
+            initializeServices(appContext)
+            
+            // Check battery status for adaptive behavior
+            val isUnderRestrictions = WidgetUpdater.checkUpdateRestrictions(appContext)
+            val updateDelay = if (isUnderRestrictions) 300L else 500L // Faster updates when under restrictions
+            
+            // Acquire wake lock with adaptive timeout
             wakeLock = WidgetUpdater.acquireWakeLock(appContext)
-
+            
+            // Check if we have widgets that need updating
             val appWidgetManager = AppWidgetManager.getInstance(appContext)
-            val updateDelay = 500L // Default delay between widget updates
-
+            val widgetsToUpdate = mutableListOf<Pair<Class<out AppWidgetProvider>, String>>()
+            
+            // Check each widget type
+            val widgetTypes = listOf(
+                BlockHeightWidget::class.java to BlockHeightWidget.REFRESH_ACTION,
+                MempoolSizeWidget::class.java to MempoolSizeWidget.REFRESH_ACTION,
+                FeeRatesWidget::class.java to FeeRatesWidget.REFRESH_ACTION,
+                CombinedStatsWidget::class.java to CombinedStatsWidget.REFRESH_ACTION
+            )
+            
+            for ((widgetClass, action) in widgetTypes) {
+                val widgetComponent = ComponentName(appContext, widgetClass)
+                val widgetIds = appWidgetManager.getAppWidgetIds(widgetComponent)
+                if (widgetIds.isNotEmpty()) {
+                    widgetsToUpdate.add(widgetClass to action)
+                }
+            }
+            
+            // If no widgets to update, just return success
+            if (widgetsToUpdate.isEmpty()) {
+                Log.d(tag, "No widgets found to update")
+                return@withContext Result.success()
+            }
+            
+            // Log update attempt for debugging
+            Log.d(tag, "Updating ${widgetsToUpdate.size} widget types")
+            
             // Update each type of widget with a delay between them
-            updateWidget(appWidgetManager, BlockHeightWidget::class.java, BlockHeightWidget.REFRESH_ACTION, 0)
-            delay(updateDelay)
-            updateWidget(appWidgetManager, MempoolSizeWidget::class.java, MempoolSizeWidget.REFRESH_ACTION, 1)
-            delay(updateDelay)
-            updateWidget(appWidgetManager, FeeRatesWidget::class.java, FeeRatesWidget.REFRESH_ACTION, 2)
-            delay(updateDelay)
-            updateWidget(appWidgetManager, CombinedStatsWidget::class.java, CombinedStatsWidget.REFRESH_ACTION, 3)
+            widgetsToUpdate.forEachIndexed { index, (widgetClass, action) ->
+                updateWidget(appWidgetManager, widgetClass, action, index)
+                if (index < widgetsToUpdate.size - 1) {
+                    delay(updateDelay)
+                }
+            }
 
             Result.success()
         } catch (e: Exception) {
+            Log.e(tag, "Error updating widgets", e)
             e.printStackTrace()
-            Result.retry()
+            
+            // Only retry if we have a network error, not for other exceptions
+            if (e is java.net.UnknownHostException || 
+                e is java.net.SocketTimeoutException ||
+                e is java.io.IOException) {
+                Result.retry()
+            } else {
+                Result.failure()
+            }
         } finally {
             // Release wake lock
             WidgetUpdater.releaseWakeLock(wakeLock)
+        }
+    }
+
+    private fun initializeServices(context: Context) {
+        try {
+            // This initialization is important for widget updates when app is killed
+            // Initialize here in case the app's Application class hasn't initialized these
+            WidgetUtils.ensureInitialized(context)
+        } catch (e: Exception) {
+            Log.e(tag, "Error initializing services: ${e.message}")
+            e.printStackTrace()
         }
     }
 
@@ -68,6 +122,7 @@ class WidgetUpdateWorker(
                 ).send()
             }
         } catch (e: Exception) {
+            Log.e(tag, "Error updating widget: ${widgetClass.simpleName}", e)
             e.printStackTrace()
         }
     }

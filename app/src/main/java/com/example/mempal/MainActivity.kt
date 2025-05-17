@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.Image
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
 import androidx.compose.material3.*
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -80,6 +82,9 @@ import com.example.mempal.ui.theme.MempalTheme
 import com.example.mempal.viewmodel.DashboardUiState
 import com.example.mempal.viewmodel.MainViewModel
 import com.example.mempal.widget.WidgetUpdater
+import com.google.accompanist.swiperefresh.SwipeRefresh
+import com.google.accompanist.swiperefresh.SwipeRefreshIndicator
+import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.Locale
@@ -116,7 +121,7 @@ class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
     private lateinit var settingsRepository: SettingsRepository
 
-    private val requestPermissionLauncher = registerForActivityResult(
+    val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
         if (isGranted) {
@@ -136,10 +141,40 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun handleNotificationPermissions() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (ContextCompat.checkSelfPermission(
+                    this,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) != PackageManager.PERMISSION_GRANTED
+            ) {
+                requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            } else {
+                // Permission granted, proceed with notifications
+                startNotificationServiceIfEnabled()
+            }
+        } else {
+            // For older versions, assume permission is granted
+            startNotificationServiceIfEnabled()
+        }
+    }
+
+    private fun startNotificationServiceIfEnabled() {
+        val settings = settingsRepository.settings.value
+        if (settings.isServiceEnabled == true) {
+            val serviceIntent = Intent(this, NotificationService::class.java)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(serviceIntent)
+            } else {
+                startService(serviceIntent)
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         val splashScreen = installSplashScreen()
         splashScreen.setKeepOnScreenCondition {
-            false // Don't hold the splash screen, let the app load immediately
+            !NetworkClient.isInitialized.value // Hold splash screen until NetworkClient is initialized
         }
 
         super.onCreate(savedInstanceState)
@@ -151,6 +186,9 @@ class MainActivity : ComponentActivity() {
 
         // Clear the server restart flag on app start
         settingsRepository.clearServerRestartFlag()
+
+        // Handle notification permissions
+        handleNotificationPermissions()
 
         // Add Tor connection event listener
         lifecycleScope.launch {
@@ -176,28 +214,34 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(
-                    this,
-                    Manifest.permission.POST_NOTIFICATIONS
-                ) != PackageManager.PERMISSION_GRANTED
-            ) {
-                requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        // In onCreate, after the existing NetworkClient initialization
+        lifecycleScope.launch {
+            // Wait for NetworkClient to be initialized
+            NetworkClient.isInitialized.collect { isInitialized ->
+                if (isInitialized) {
+                    NetworkClient.isNetworkAvailable.collect { isAvailable ->
+                        if (isAvailable) {
+                            viewModel.refreshData()
+                            // Also update widgets when network becomes available
+                            WidgetUpdater.requestImmediateUpdate(applicationContext)
+                        }
+                    }
+                }
+            }
+        }
+
+        // Add an observer for the dashboard data state
+        lifecycleScope.launch {
+            viewModel.uiState.collect { uiState ->
+                if (uiState is DashboardUiState.Success && !uiState.isCache) {
+                    // If we have fresh data, update the widgets
+                    WidgetUpdater.requestImmediateUpdate(applicationContext)
+                }
             }
         }
 
         // Check service state and update settings immediately
         updateServiceState()
-
-        // In onCreate, after the existing NetworkClient initialization
-        lifecycleScope.launch {
-            NetworkClient.isNetworkAvailable.collect { isAvailable ->
-                if (isAvailable && NetworkClient.isInitialized.value) {
-                    // Network is available and client is initialized, refresh data
-                    viewModel.refreshData()
-                }
-            }
-        }
 
         setContent {
             MempalTheme {
@@ -224,6 +268,14 @@ class MainActivity : ComponentActivity() {
                 // Wait a bit for any network/Tor connections to stabilize
                 delay(1000)
                 viewModel.refreshData()
+                
+                // Also update all widgets when app is opened
+                try {
+                    WidgetUpdater.requestImmediateUpdate(applicationContext)
+                } catch (e: Exception) {
+                    // Just log any error, don't crash the app for widget updates
+                    e.printStackTrace()
+                }
             }
         }
     }
@@ -256,6 +308,9 @@ private fun MainScreen(viewModel: MainViewModel) {
     val context = LocalContext.current
     val settingsRepository = remember { SettingsRepository.getInstance(context) }
     var showWelcomeDialog by remember { mutableStateOf(settingsRepository.isFirstLaunch()) }
+    val activity = context as MainActivity
+    val isRefreshing by viewModel.isMainRefreshing.collectAsState()
+    val scope = rememberCoroutineScope()
 
     // Effect to handle tab changes and periodic refresh
     LaunchedEffect(selectedTab) {
@@ -343,17 +398,40 @@ private fun MainScreen(viewModel: MainViewModel) {
             }
         ) { paddingValues ->
             when (selectedTab) {
-                0 -> Column(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(rememberScrollState())
-                ) {
-                    AppHeader()
-                    MainContent(
-                        viewModel = viewModel,
-                        uiState = uiState,
-                        modifier = Modifier.padding(paddingValues)
-                    )
+                0 -> {
+                    Column(modifier = Modifier.fillMaxSize()) {
+                        AppHeader()
+                        
+                        // Use Accompanist SwipeRefresh
+                        SwipeRefresh(
+                            state = rememberSwipeRefreshState(isRefreshing),
+                            onRefresh = { 
+                                scope.launch {
+                                    viewModel.refreshData()
+                                }
+                            },
+                            indicator = { state, trigger ->
+                                SwipeRefreshIndicator(
+                                    state = state,
+                                    refreshTriggerDistance = trigger,
+                                    backgroundColor = AppColors.DarkerNavy,
+                                    contentColor = AppColors.Orange
+                                )
+                            }
+                        ) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .verticalScroll(rememberScrollState())
+                            ) {
+                                MainContent(
+                                    viewModel = viewModel,
+                                    uiState = uiState,
+                                    modifier = Modifier.padding(paddingValues)
+                                )
+                            }
+                        }
+                    }
                 }
                 1 -> Column(
                     modifier = Modifier
@@ -361,7 +439,10 @@ private fun MainScreen(viewModel: MainViewModel) {
                         .verticalScroll(rememberScrollState())
                 ) {
                     AppHeader()
-                    NotificationsScreen(modifier = Modifier.padding(paddingValues))
+                    NotificationsScreen(
+                        modifier = Modifier.padding(paddingValues),
+                        requestPermissionLauncher = activity.requestPermissionLauncher
+                    )
                 }
                 2 -> Column(
                     modifier = Modifier
@@ -971,7 +1052,7 @@ private fun DataCard(
 
 @Composable
 private fun TooltipButton(
-    tooltip: String,
+    tooltip: @Composable () -> Unit,
     icon: ImageVector = Icons.Default.Info,
     tint: Color = MaterialTheme.colorScheme.onSurface
 ) {
@@ -999,16 +1080,33 @@ private fun TooltipButton(
                     color = AppColors.DarkGray,
                     tonalElevation = 4.dp
                 ) {
-                    Text(
-                        text = tooltip,
-                        modifier = Modifier.padding(12.dp),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = Color.White
-                    )
+                    Box(modifier = Modifier.padding(12.dp)) {
+                        tooltip()
+                    }
                 }
             }
         }
     }
+}
+
+// Add an overload for string tooltips to maintain compatibility with existing usage
+@Composable
+private fun TooltipButton(
+    tooltip: String,
+    icon: ImageVector = Icons.Default.Info,
+    tint: Color = MaterialTheme.colorScheme.onSurface
+) {
+    TooltipButton(
+        tooltip = {
+            Text(
+                text = tooltip,
+                style = MaterialTheme.typography.bodyLarge,
+                color = Color.White
+            )
+        },
+        icon = icon,
+        tint = tint
+    )
 }
 
 @Composable
@@ -1247,7 +1345,8 @@ private fun HistogramContent(mempoolInfo: MempoolInfo) {
 
 @Composable
 private fun NotificationsScreen(
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    requestPermissionLauncher: ActivityResultLauncher<String>
 ) {
     val context = LocalContext.current
     val settingsRepository = remember { SettingsRepository.getInstance(context) }
@@ -1270,8 +1369,19 @@ private fun NotificationsScreen(
     ) {
         Button(
             onClick = {
-                val serviceIntent = Intent(context, NotificationService::class.java)
                 if (!settings.isServiceEnabled) {
+                    // Check notification permission before enabling service
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        if (ContextCompat.checkSelfPermission(
+                                context,
+                                Manifest.permission.POST_NOTIFICATIONS
+                            ) != PackageManager.PERMISSION_GRANTED
+                        ) {
+                            requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            return@Button
+                        }
+                    }
+                    val serviceIntent = Intent(context, NotificationService::class.java)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         context.startForegroundService(serviceIntent)
                     } else {
@@ -1279,6 +1389,7 @@ private fun NotificationsScreen(
                     }
                     settingsRepository.updateSettings(settings.copy(isServiceEnabled = true))
                 } else {
+                    val serviceIntent = Intent(context, NotificationService::class.java)
                     context.stopService(serviceIntent)
                     settingsRepository.updateSettings(settings.copy(isServiceEnabled = false))
                 }
@@ -2578,11 +2689,41 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                     )
                     Spacer(modifier = Modifier.width(4.dp))
                     TooltipButton(
-                        tooltip = "Any widget can be manually updated by tapping it once. You can also double tap any widget to open the Mempal app."
+                        tooltip = {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = """If widgets don't update properly, enable "unrestricted" app battery usage.""",
+                                    modifier = Modifier.weight(1f).padding(end = 8.dp),
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = Color.White
+                                )
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                                    contentDescription = "Open battery settings",
+                                    tint = Color.White,
+                                    modifier = Modifier
+                                        .size(20.dp)
+                                        .clickable {
+                                            val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                                data = Uri.fromParts("package", context.packageName, null)
+                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            }
+                                            context.startActivity(intent)
+                                        }
+                                )
+                            }
+                        }
                     )
                 }
 
                 var expanded by remember { mutableStateOf(false) }
+                var showCustomHoursDialog by remember { mutableStateOf(false) }
+                var customHoursText by remember { mutableStateOf("") }
+                
                 ExposedDropdownMenuBox(
                     expanded = expanded,
                     onExpandedChange = { expanded = !expanded }
@@ -2592,14 +2733,15 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                             15L -> "15 minutes"
                             30L -> "30 minutes"
                             60L -> "1 hour"
-                            120L -> "2 hours"
-                            else -> "30 minutes"
+                            else -> if (updateFrequency > 60L) "${updateFrequency / 60L} hours" else "$updateFrequency minutes"
                         },
                         onValueChange = {},
                         readOnly = true,
                         label = { Text("Update frequency") },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                        modifier = Modifier.menuAnchor(),
+                        modifier = Modifier
+                            .menuAnchor()
+                            .fillMaxWidth(),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = AppColors.Orange,
                             focusedLabelColor = AppColors.Orange
@@ -2610,21 +2752,26 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                         expanded = expanded,
                         onDismissRequest = { expanded = false }
                     ) {
-                        listOf(15L, 30L, 60L, 120L).forEach { minutes ->
+                        listOf(15L, 30L, 60L, "custom").forEach { option ->
                             DropdownMenuItem(
                                 text = {
-                                    Text(when (minutes) {
+                                    Text(when (option) {
                                         15L -> "15 minutes"
                                         30L -> "30 minutes"
                                         60L -> "1 hour"
-                                        else -> "2 hours"
+                                        else -> "Custom..."
                                     })
                                 },
                                 onClick = {
-                                    updateFrequency = minutes
-                                    settingsRepository.saveUpdateFrequency(minutes)
-                                    WidgetUpdater.scheduleUpdates(context)
-                                    expanded = false
+                                    if (option == "custom") {
+                                        expanded = false
+                                        showCustomHoursDialog = true
+                                    } else {
+                                        updateFrequency = option as Long
+                                        settingsRepository.saveUpdateFrequency(option)
+                                        WidgetUpdater.scheduleUpdates(context)
+                                        expanded = false
+                                    }
                                 },
                                 contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
                             )
@@ -2632,8 +2779,70 @@ private fun SettingsScreen(modifier: Modifier = Modifier) {
                     }
                 }
 
+                if (showCustomHoursDialog) {
+                    AlertDialog(
+                        onDismissRequest = { showCustomHoursDialog = false },
+                        title = { Text("Set Custom Update Frequency") },
+                        text = {
+                            Column {
+                                Text(
+                                    "Enter update frequency in hours (1-24)",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    modifier = Modifier.padding(bottom = 8.dp)
+                                )
+                                OutlinedTextField(
+                                    value = customHoursText,
+                                    onValueChange = { value ->
+                                        // Only allow digits and limit length
+                                        if (value.all { it.isDigit() } && value.length <= 2) {
+                                            customHoursText = value
+                                        }
+                                    },
+                                    label = { Text("Hours") },
+                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    val hours = customHoursText.toIntOrNull()
+                                    if (hours != null && hours in 1..24) {
+                                        val minutes = hours * 60L
+                                        updateFrequency = minutes
+                                        settingsRepository.saveUpdateFrequency(minutes)
+                                        WidgetUpdater.scheduleUpdates(context)
+                                        showCustomHoursDialog = false
+                                        customHoursText = ""
+                                    }
+                                }
+                            ) {
+                                Text("Save")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(
+                                onClick = {
+                                    showCustomHoursDialog = false
+                                    customHoursText = ""
+                                }
+                            ) {
+                                Text("Cancel")
+                            }
+                        }
+                    )
+                }
+
                 Text(
-                    text = "Widgets will auto-update every $updateFrequency minutes.",
+                    text = when {
+                        updateFrequency >= 60L && updateFrequency % 60L == 0L -> {
+                            val hours = updateFrequency / 60L
+                            "Widgets will auto-update every ${if (hours == 1L) "1 hour" else "$hours hours"}."
+                        }
+                        else -> "Widgets will auto-update every $updateFrequency minutes."
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = AppColors.DataGray,
                     modifier = Modifier.padding(top = 4.dp, start = 12.dp)
@@ -2916,12 +3125,12 @@ private fun WelcomeDialog(onDismiss: () -> Unit) {
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = "Welcome to Mempal",
+                    text = "Welcome to Mempal!",
                     style = MaterialTheme.typography.headlineSmall,
                     textAlign = TextAlign.Center
                 )
                 Text(
-                    text = "Some quick tips to get you started!",
+                    text = "Here are some quick tips to get you started.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = Color.White,
                     textAlign = TextAlign.Center,
@@ -2951,7 +3160,7 @@ private fun WelcomeDialog(onDismiss: () -> Unit) {
                         textAlign = TextAlign.Center
                     )
                     Text(
-                        text = "•Tap dashboard anywhere to refresh.\n•Tap logo to open block explorer.",
+                        text = "•Tap or swipe down to refresh dashboard.\n•Tap Mempal logo to open block explorer.",
                         textAlign = TextAlign.Center,
                         modifier = Modifier.fillMaxWidth()
                     )

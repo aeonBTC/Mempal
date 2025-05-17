@@ -169,6 +169,18 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch {
             try {
                 println("Starting parallel API calls...")
+                
+                // Safely get the API instance
+                val api = try {
+                    NetworkClient.mempoolApi
+                } catch (e: IllegalStateException) {
+                    println("NetworkClient not properly initialized: ${e.message}")
+                    _uiState.value = DashboardUiState.Error(
+                        message = "Initializing connection...",
+                        isReconnecting = true
+                    )
+                    return@launch
+                }
 
                 coroutineScope {
                     // For non-Tor connections, we'll use a more aggressive timeout
@@ -180,12 +192,12 @@ class MainViewModel : ViewModel() {
                         // First batch: Essential data
                         val blockHeightDeferred = async { 
                             withTimeout(timeoutMillis) {
-                                NetworkClient.mempoolApi.getBlockHeight()
+                                api.getBlockHeight()
                             }
                         }
                         val feeRatesDeferred = async { 
                             withTimeout(timeoutMillis) {
-                                NetworkClient.mempoolApi.getFeeRates()
+                                api.getFeeRates()
                             }
                         }
 
@@ -234,7 +246,7 @@ class MainViewModel : ViewModel() {
                         launch {
                             try {
                                 val mempoolInfoResponse = withTimeout(timeoutMillis) {
-                                    NetworkClient.mempoolApi.getMempoolInfo()
+                                    api.getMempoolInfo()
                                 }
                                 if (mempoolInfoResponse.isSuccessful) {
                                     val mempoolInfo = mempoolInfoResponse.body()
@@ -292,12 +304,12 @@ class MainViewModel : ViewModel() {
                             launch {
                                 try {
                                     val blockHashResponse = withTimeout(timeoutMillis) {
-                                        NetworkClient.mempoolApi.getLatestBlockHash()
+                                        api.getLatestBlockHash()
                                     }
                                     if (blockHashResponse.isSuccessful) {
                                         blockHashResponse.body()?.let { hash ->
                                             val blockInfoResponse = withTimeout(timeoutMillis) {
-                                                NetworkClient.mempoolApi.getBlockInfo(hash)
+                                                api.getBlockInfo(hash)
                                             }
                                             if (blockInfoResponse.isSuccessful) {
                                                 blockInfoResponse.body()?.timestamp?.let { timestamp ->
@@ -323,17 +335,17 @@ class MainViewModel : ViewModel() {
                         // For Tor connections, use longer timeouts but similar approach
                         val blockHeightDeferred = async { 
                             withTimeout(timeoutMillis) {
-                                NetworkClient.mempoolApi.getBlockHeight()
+                                api.getBlockHeight()
                             }
                         }
                         val feeRatesDeferred = async { 
                             withTimeout(timeoutMillis) {
-                                NetworkClient.mempoolApi.getFeeRates()
+                                api.getFeeRates()
                             }
                         }
                         val mempoolInfoDeferred = async {
                             withTimeout(timeoutMillis) {
-                                NetworkClient.mempoolApi.getMempoolInfo()
+                                api.getMempoolInfo()
                             }
                         }
 
@@ -395,12 +407,12 @@ class MainViewModel : ViewModel() {
                             launch {
                                 try {
                                     val blockHashResponse = withTimeout(timeoutMillis) {
-                                        NetworkClient.mempoolApi.getLatestBlockHash()
+                                        api.getLatestBlockHash()
                                     }
                                     if (blockHashResponse.isSuccessful) {
                                         blockHashResponse.body()?.let { hash ->
                                             val blockInfoResponse = withTimeout(timeoutMillis) {
-                                                NetworkClient.mempoolApi.getBlockInfo(hash)
+                                                api.getBlockInfo(hash)
                                             }
                                             if (blockInfoResponse.isSuccessful) {
                                                 blockInfoResponse.body()?.timestamp?.let { timestamp ->
@@ -438,9 +450,22 @@ class MainViewModel : ViewModel() {
     fun refreshData() {
         viewModelScope.launch {
             _uiState.value = DashboardUiState.Loading
-        _isMainRefreshing.value = true
+            _isMainRefreshing.value = true
 
             try {
+                // Check if NetworkClient is initialized and Tor is ready if needed
+                if (!NetworkClient.isInitialized.value) {
+                    val torManager = TorManager.getInstance()
+                    if (NetworkClient.isUsingOnion() && torManager.torStatus.value != TorStatus.CONNECTED) {
+                        _uiState.value = DashboardUiState.Error("Waiting for Tor connection...", isReconnecting = true)
+                        _isMainRefreshing.value = false
+                        return@launch
+                    }
+                    _uiState.value = DashboardUiState.Error("Initializing network...", isReconnecting = true)
+                    _isMainRefreshing.value = false
+                    return@launch
+                }
+
                 // Create separate async calls with explicit types
                 val blockHeightDeferred = async { NetworkClient.mempoolApi.getBlockHeight() }
                 val mempoolInfoDeferred = async { NetworkClient.mempoolApi.getMempoolInfo() }
