@@ -1273,7 +1273,8 @@ private fun HistogramContent(mempoolInfo: MempoolInfo) {
                         fee >= 4 -> "4 - 5"
                         fee >= 3 -> "3 - 4"
                         fee >= 2 -> "2 - 3"
-                        else -> "1 - 2"
+                        fee >= 1 -> "1 - 2"
+                        else -> "0 - 1"
                     }
 
                     sizeMap[rangeStr] = (sizeMap[rangeStr] ?: 0.0) + size

@@ -154,6 +154,10 @@ class CombinedStatsWidget : AppWidgetProvider() {
         views.setOnClickPendingIntent(R.id.widget_layout, refreshPendingIntent)
         appWidgetManager.updateAppWidget(appWidgetId, views)
 
+        // Create a separate mutable state for views that can be updated by multiple coroutines
+        val sharedViews = views
+        var viewsUpdated = false
+
         // Start new job
         activeJobs[appWidgetId] = getOrCreateScope().launch {
             var viewsPreparedForData = false
@@ -185,14 +189,14 @@ class CombinedStatsWidget : AppWidgetProvider() {
                     val feeRates = feeRatesResponse.body()
 
                     if (blockHeight != null && mempoolInfo != null && feeRates != null) {
-                        views.setTextViewText(R.id.block_height, String.format(Locale.US, "%,d", blockHeight))
+                        sharedViews.setTextViewText(R.id.block_height, String.format(Locale.US, "%,d", blockHeight))
                         val sizeInMB = mempoolInfo.vsize / 1_000_000.0
-                        views.setTextViewText(R.id.mempool_size, String.format(Locale.US, "%.2f vMB", sizeInMB))
+                        sharedViews.setTextViewText(R.id.mempool_size, String.format(Locale.US, "%.2f vMB", sizeInMB))
                         val blocksToClean = ceil(sizeInMB / 1.5).toInt()
-                        views.setTextViewText(R.id.mempool_blocks_to_clear, "$blocksToClean ${if (blocksToClean == 1) "block" else "blocks"} to clear")
-                        views.setTextViewText(R.id.priority_fee, "${feeRates.fastestFee} ")
-                        views.setTextViewText(R.id.standard_fee, "${feeRates.halfHourFee} ")
-                        views.setTextViewText(R.id.economy_fee, "${feeRates.hourFee} ")
+                        sharedViews.setTextViewText(R.id.mempool_blocks_to_clear, "$blocksToClean ${if (blocksToClean == 1) "block" else "blocks"} to clear")
+                        sharedViews.setTextViewText(R.id.priority_fee, "${feeRates.fastestFee} ")
+                        sharedViews.setTextViewText(R.id.standard_fee, "${feeRates.halfHourFee} ")
+                        sharedViews.setTextViewText(R.id.economy_fee, "${feeRates.hourFee} ")
                         viewsPreparedForData = true // Base data is good
 
                         // Try to get block timestamp (secondary data)
@@ -204,20 +208,27 @@ class CombinedStatsWidget : AppWidgetProvider() {
                                     if (blockInfoResponse.isSuccessful) {
                                         blockInfoResponse.body()?.timestamp?.let { timestamp ->
                                             val elapsedMinutes = (System.currentTimeMillis() / 1000 - timestamp) / 60
-                                            views.setTextViewText(R.id.elapsed_time, "$elapsedMinutes ${if (elapsedMinutes == 1L) "minute" else "minutes"} ago")
+                                            sharedViews.setTextViewText(R.id.elapsed_time, "$elapsedMinutes ${if (elapsedMinutes == 1L) "minute" else "minutes"} ago")
                                         }
                                     } else {
-                                        views.setTextViewText(R.id.elapsed_time, "") 
+                                        sharedViews.setTextViewText(R.id.elapsed_time, "") 
                                     }
                                 } catch (e: Exception) {
                                     Log.e(TAG, "Error fetching block info for $appWidgetId: ${e.message}")
-                                    views.setTextViewText(R.id.elapsed_time, "")
+                                    sharedViews.setTextViewText(R.id.elapsed_time, "")
                                 }
-                            } ?: views.setTextViewText(R.id.elapsed_time, "") // Hash body null
+                            } ?: sharedViews.setTextViewText(R.id.elapsed_time, "") // Hash body null
                         } else {
-                            views.setTextViewText(R.id.elapsed_time, "") // Hash request failed
+                            sharedViews.setTextViewText(R.id.elapsed_time, "") // Hash request failed
                         }
                         Log.d(TAG, "Data prepared for widget ID: $appWidgetId")
+                        
+                        // Update widget with data immediately when we have it
+                        if (!viewsUpdated) {
+                            appWidgetManager.updateAppWidget(appWidgetId, sharedViews)
+                            viewsUpdated = true
+                            Log.d(TAG, "Widget $appWidgetId UI updated with new data")
+                        }
                     } else {
                         Log.w(TAG, "One or more essential response bodies were null for ID: $appWidgetId")
                     }
@@ -226,24 +237,32 @@ class CombinedStatsWidget : AppWidgetProvider() {
                 }
 
                 if (!viewsPreparedForData) {
-                    setErrorState(views)
+                    setErrorState(sharedViews)
                     Log.d(TAG, "Error state set for widget ID: $appWidgetId after data fetch attempt")
                 }
 
             } catch (e: CancellationException) {
                 Log.d(TAG, "Job for widget $appWidgetId was cancelled during try block.")
+                
+                // Don't throw the exception if we already updated the UI
+                if (!viewsUpdated && viewsPreparedForData) {
+                    // Final attempt to update UI before exiting
+                    appWidgetManager.updateAppWidget(appWidgetId, sharedViews)
+                    Log.d(TAG, "Managed to update widget $appWidgetId UI despite job cancellation")
+                    viewsUpdated = true
+                }
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Exception during widget update for ID: $appWidgetId", e)
-                setErrorState(views)
+                setErrorState(sharedViews)
                 Log.d(TAG, "Error state set for widget ID: $appWidgetId due to exception")
             } finally {
                 val job = coroutineContext[Job]
-                if (job?.isCancelled == false) {
-                    appWidgetManager.updateAppWidget(appWidgetId, views)
+                if (job?.isCancelled == false || !viewsUpdated) {
+                    appWidgetManager.updateAppWidget(appWidgetId, sharedViews)
                     Log.d(TAG, "Final update in finally for widget $appWidgetId. Data: $viewsPreparedForData")
                 } else {
-                    Log.d(TAG, "Job for widget $appWidgetId was cancelled. Skipping final UI update in finally.")
+                    Log.d(TAG, "Job for widget $appWidgetId was cancelled. UI was already updated in finally.")
                 }
                 activeJobs.remove(appWidgetId)
                 WidgetUtils.resetTapState()

@@ -153,6 +153,10 @@ class BlockHeightWidget : AppWidgetProvider() {
         views.setOnClickPendingIntent(R.id.widget_layout, refreshPendingIntent)
         appWidgetManager.updateAppWidget(appWidgetId, views)
 
+        // Create a separate mutable state for views that can be updated by multiple coroutines
+        val sharedViews = views
+        var viewsUpdated = false
+
         // Start new job
         activeJobs[appWidgetId] = getOrCreateScope().launch {
             var viewsPreparedForData = false
@@ -171,7 +175,7 @@ class BlockHeightWidget : AppWidgetProvider() {
 
                 if (blockHeightResponse != null && blockHeightResponse.isSuccessful) {
                     blockHeightResponse.body()?.let { blockHeight ->
-                        views.setTextViewText(R.id.block_height, String.format(Locale.US, "%,d", blockHeight))
+                        sharedViews.setTextViewText(R.id.block_height, String.format(Locale.US, "%,d", blockHeight))
                         // Block height is primary data, consider this a partial success for now
                         viewsPreparedForData = true 
 
@@ -183,21 +187,29 @@ class BlockHeightWidget : AppWidgetProvider() {
                                     if (blockInfoResponse.isSuccessful) {
                                         blockInfoResponse.body()?.timestamp?.let { timestamp ->
                                             val elapsedMinutes = (System.currentTimeMillis() / 1000 - timestamp) / 60
-                                            views.setTextViewText(R.id.elapsed_time, "$elapsedMinutes ${if (elapsedMinutes == 1L) "minute" else "minutes"} ago")
+                                            sharedViews.setTextViewText(R.id.elapsed_time, "$elapsedMinutes ${if (elapsedMinutes == 1L) "minute" else "minutes"} ago")
                                         }
                                     } else {
                                         Log.w(TAG, "Block info response unsuccessful for $appWidgetId: ${blockInfoResponse.code()}")
-                                        views.setTextViewText(R.id.elapsed_time, "") // Clear if failed
+                                        sharedViews.setTextViewText(R.id.elapsed_time, "") // Clear if failed
                                     }
                                 } catch (e: Exception) {
                                     Log.e(TAG, "Error fetching block info for $appWidgetId: ${e.message}")
-                                    views.setTextViewText(R.id.elapsed_time, "") // Clear on exception
+                                    sharedViews.setTextViewText(R.id.elapsed_time, "") // Clear on exception
                                 }
                             } ?: Log.w(TAG, "Block hash body was null for $appWidgetId")
                         } else {
                             Log.w(TAG, "Block hash response unsuccessful or null for $appWidgetId. Code: ${blockHashResponse?.code()}")
-                            views.setTextViewText(R.id.elapsed_time, "") // Clear if hash fetch failed
+                            sharedViews.setTextViewText(R.id.elapsed_time, "") // Clear if hash fetch failed
                         }
+                        
+                        // Update widget with data immediately when we have it
+                        if (!viewsUpdated) {
+                            appWidgetManager.updateAppWidget(appWidgetId, sharedViews)
+                            viewsUpdated = true
+                            Log.d(TAG, "Widget $appWidgetId UI updated with new data")
+                        }
+                        
                         Log.d(TAG, "Data prepared (at least partially) for widget ID: $appWidgetId")
                     } ?: run {
                         Log.w(TAG, "Block height response body was null for $appWidgetId")
@@ -208,24 +220,32 @@ class BlockHeightWidget : AppWidgetProvider() {
                 }
 
                 if (!viewsPreparedForData) {
-                    setErrorState(views)
+                    setErrorState(sharedViews)
                     Log.d(TAG, "Error state set for widget ID: $appWidgetId after data fetch attempt")
                 }
 
             } catch (e: CancellationException) {
                 Log.d(TAG, "Job for widget $appWidgetId was cancelled during try block.")
+                
+                // Don't throw the exception if we already updated the UI
+                if (!viewsUpdated && viewsPreparedForData) {
+                    // Final attempt to update UI before exiting
+                    appWidgetManager.updateAppWidget(appWidgetId, sharedViews)
+                    Log.d(TAG, "Managed to update widget $appWidgetId UI despite job cancellation")
+                    viewsUpdated = true
+                }
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Exception during widget update for ID: $appWidgetId", e)
-                setErrorState(views)
+                setErrorState(sharedViews)
                  Log.d(TAG, "Error state set for widget ID: $appWidgetId due to exception")
             } finally {
                 val job = coroutineContext[Job]
-                if (job?.isCancelled == false) {
-                    appWidgetManager.updateAppWidget(appWidgetId, views)
+                if (job?.isCancelled == false || !viewsUpdated) {
+                    appWidgetManager.updateAppWidget(appWidgetId, sharedViews)
                     Log.d(TAG, "Final update in finally for widget $appWidgetId. Data: $viewsPreparedForData")
                 } else {
-                    Log.d(TAG, "Job for widget $appWidgetId was cancelled. Skipping final UI update in finally.")
+                    Log.d(TAG, "Job for widget $appWidgetId was cancelled. UI was already updated in finally.")
                 }
                 activeJobs.remove(appWidgetId)
                 WidgetUtils.resetTapState()

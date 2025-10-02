@@ -154,6 +154,10 @@ class MempoolSizeWidget : AppWidgetProvider() {
         views.setOnClickPendingIntent(R.id.widget_layout, refreshPendingIntent)
         appWidgetManager.updateAppWidget(appWidgetId, views)
 
+        // Create a separate mutable state for views that can be updated by multiple coroutines
+        val sharedViews = views
+        var viewsUpdated = false
+
         // Start new job
         activeJobs[appWidgetId] = getOrCreateScope().launch {
             var viewsPreparedForData = false
@@ -175,13 +179,21 @@ class MempoolSizeWidget : AppWidgetProvider() {
                 if (response != null && response.isSuccessful) {
                     response.body()?.let {
                         val sizeInMB = it.vsize / 1_000_000.0
-                        views.setTextViewText(R.id.mempool_size, 
+                        sharedViews.setTextViewText(R.id.mempool_size, 
                             String.format(Locale.US, "%.2f vMB", sizeInMB))
                             
                         val blocksToClean = ceil(sizeInMB / 1.5).toInt()
-                        views.setTextViewText(R.id.mempool_blocks_to_clear,
+                        sharedViews.setTextViewText(R.id.mempool_blocks_to_clear,
                             "$blocksToClean ${if (blocksToClean == 1) "block" else "blocks"} to clear")
                         viewsPreparedForData = true
+                        
+                        // Update widget with data immediately when we have it
+                        if (!viewsUpdated) {
+                            appWidgetManager.updateAppWidget(appWidgetId, sharedViews)
+                            viewsUpdated = true
+                            Log.d(TAG, "Widget $appWidgetId UI updated with new data")
+                        }
+                        
                         Log.d(TAG, "Data prepared for widget ID: $appWidgetId")
                     } ?: run {
                         Log.w(TAG, "Mempool info response body was null for ID: $appWidgetId")
@@ -191,24 +203,32 @@ class MempoolSizeWidget : AppWidgetProvider() {
                 }
 
                 if (!viewsPreparedForData) {
-                    setErrorState(views)
+                    setErrorState(sharedViews)
                     Log.d(TAG, "Error state set for widget ID: $appWidgetId after data fetch attempt")
                 }
 
             } catch (e: CancellationException) {
                 Log.d(TAG, "Job for widget $appWidgetId was cancelled during try block.")
+                
+                // Don't throw the exception if we already updated the UI
+                if (!viewsUpdated && viewsPreparedForData) {
+                    // Final attempt to update UI before exiting
+                    appWidgetManager.updateAppWidget(appWidgetId, sharedViews)
+                    Log.d(TAG, "Managed to update widget $appWidgetId UI despite job cancellation")
+                    viewsUpdated = true
+                }
                 throw e // Re-throw to ensure cancellation is propagated
             } catch (e: Exception) {
                 Log.e(TAG, "Exception during widget update for ID: $appWidgetId", e)
-                setErrorState(views)
+                setErrorState(sharedViews)
                 Log.d(TAG, "Error state set for widget ID: $appWidgetId due to exception")
             } finally {
                 val job = coroutineContext[Job]
-                if (job?.isCancelled == false) {
-                    appWidgetManager.updateAppWidget(appWidgetId, views)
+                if (job?.isCancelled == false || !viewsUpdated) {
+                    appWidgetManager.updateAppWidget(appWidgetId, sharedViews)
                     Log.d(TAG, "Final update in finally for widget $appWidgetId. Data: $viewsPreparedForData")
                 } else {
-                    Log.d(TAG, "Job for widget $appWidgetId was cancelled. Skipping final UI update in finally.")
+                    Log.d(TAG, "Job for widget $appWidgetId was cancelled. UI was already updated in finally.")
                 }
                 activeJobs.remove(appWidgetId)
                 WidgetUtils.resetTapState() 
