@@ -26,6 +26,10 @@ android {
     }
 
     buildTypes {
+        debug {
+            isMinifyEnabled = false
+            isShrinkResources = false
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -116,4 +120,17 @@ dependencies {
     // WorkManager
     implementation("androidx.work:work-runtime-ktx:2.10.1")
     implementation("androidx.work:work-runtime:2.10.1")
+}
+
+tasks.whenTaskAdded {
+    if (name.contains("ArtProfile") || name.contains("BaselineProfile") || name.contains("baseline")) {
+        enabled = false
+    }
+}
+
+// Disable baseline profile generation tasks
+tasks.configureEach {
+    if (name.contains("ArtProfile") || name.contains("BaselineProfile") || name.contains("baseline")) {
+        enabled = false
+    }
 }
