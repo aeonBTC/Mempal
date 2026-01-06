@@ -1,7 +1,10 @@
 # Mempal
 
+<img width="310" height="625" alt="1" src="https://github.com/user-attachments/assets/f40b0833-89f3-4071-a729-0983c63654de" />
+<img width="310" height="625" alt="2" src="https://github.com/user-attachments/assets/3ad67232-5a28-489a-aa7a-206d30075761" />
+<img width="310" height="625" alt="5" src="https://github.com/user-attachments/assets/529cffd1-764b-400d-bf8b-148bc053a3b3" />
 
-![396710790-db06e32d-9a03-421c-ba9b-0584c00c7dec copy](https://github.com/user-attachments/assets/d72f4670-aa5e-4072-99a8-853cb3b0c9fe)
+
 
 
 [<img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png" alt="Get it on F-Droid" height="80">](https://f-droid.org/en/packages/com.example.mempal/)
