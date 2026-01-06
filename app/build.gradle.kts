@@ -13,23 +13,19 @@ android {
         includeInBundle = false
     }
     
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.example.mempal"
         minSdk = 24
         targetSdk = 35
-        versionCode = 16
-        versionName = "1.5.4"
+        versionCode = 20
+        versionName = "2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         multiDexEnabled = true
     }
 
     buildTypes {
-        debug {
-            isMinifyEnabled = false
-            isShrinkResources = false
-        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -79,7 +75,6 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
     implementation(libs.androidx.constraintlayout)
-    implementation(libs.pull.refresh)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
@@ -111,7 +106,7 @@ dependencies {
     implementation(libs.androidx.core.splashscreen)
     implementation("androidx.multidex:multidex:2.0.1")
     implementation(libs.androidx.core.ktx)
-    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.appcompat:appcompat:1.7.1")
 
     implementation(libs.tor.android)
     implementation(libs.jtorctl)
@@ -120,17 +115,4 @@ dependencies {
     // WorkManager
     implementation("androidx.work:work-runtime-ktx:2.10.1")
     implementation("androidx.work:work-runtime:2.10.1")
-}
-
-tasks.whenTaskAdded {
-    if (name.contains("ArtProfile") || name.contains("BaselineProfile") || name.contains("baseline")) {
-        enabled = false
-    }
-}
-
-// Disable baseline profile generation tasks
-tasks.configureEach {
-    if (name.contains("ArtProfile") || name.contains("BaselineProfile") || name.contains("baseline")) {
-        enabled = false
-    }
 }
