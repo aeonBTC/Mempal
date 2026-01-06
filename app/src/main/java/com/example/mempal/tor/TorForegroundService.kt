@@ -25,6 +25,8 @@ class TorForegroundService : Service() {
         } else {
             startForeground(NotificationService.NOTIFICATION_ID, createSilentNotification())
         }
+        // Renew wakelock to ensure it stays active for long-running service
+        renewWakeLock()
         return START_STICKY
     }
 
@@ -49,8 +51,34 @@ class TorForegroundService : Service() {
     private fun acquireWakeLock() {
         wakeLock = (getSystemService(POWER_SERVICE) as PowerManager).run {
             newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, wakelockTag).apply {
-                acquire()
+                // Use 4 hour timeout as a safety net - the service should release it in onDestroy()
+                // but this ensures the OS will clean it up if something goes wrong (e.g., crash)
+                // For long-running sessions, the wakelock will be renewed in onStartCommand if needed
+                acquire(4 * 60 * 60 * 1000L)
             }
+        }
+    }
+
+    private fun renewWakeLock() {
+        // Renew wakelock to ensure it stays active for long-running service
+        // If wakelock expired or doesn't exist, acquire a new one
+        // This is called in onStartCommand which runs periodically for START_STICKY services
+        try {
+            if (wakeLock?.isHeld != true) {
+                // Release old wakelock if it exists but isn't held (expired)
+                wakeLock?.let {
+                    try {
+                        if (it.isHeld) it.release()
+                    } catch (_: Exception) {
+                        // Ignore - wakelock might already be released
+                    }
+                }
+                // Acquire a fresh wakelock with new timeout
+                acquireWakeLock()
+            }
+        } catch (_: Exception) {
+            // If renewal fails, try to acquire anyway
+            acquireWakeLock()
         }
     }
 

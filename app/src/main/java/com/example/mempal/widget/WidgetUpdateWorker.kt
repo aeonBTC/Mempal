@@ -26,10 +26,11 @@ class WidgetUpdateWorker(
             
             // Check battery status for adaptive behavior
             val isUnderRestrictions = WidgetUpdater.checkUpdateRestrictions(appContext)
-            val updateDelay = if (isUnderRestrictions) 300L else 500L // Faster updates when under restrictions
             
-            // Acquire wake lock with adaptive timeout
-            wakeLock = WidgetUpdater.acquireWakeLock(appContext)
+            // Acquire wake lock with adaptive timeout (only if not in power save mode)
+            if (!isUnderRestrictions) {
+                wakeLock = WidgetUpdater.acquireWakeLock(appContext)
+            }
             
             // Check if we have widgets that need updating
             val appWidgetManager = AppWidgetManager.getInstance(appContext)
@@ -60,13 +61,16 @@ class WidgetUpdateWorker(
             // Log update attempt for debugging
             Log.d(tag, "Updating ${widgetsToUpdate.size} widget types")
             
-            // Update each type of widget with a delay between them
-            widgetsToUpdate.forEachIndexed { index, (widgetClass, action) ->
-                updateWidget(appWidgetManager, widgetClass, action, index)
-                if (index < widgetsToUpdate.size - 1) {
-                    delay(updateDelay)
+            // Update all widgets in parallel for faster updates
+            // PendingIntent.send() is non-blocking, so we can update all widgets simultaneously
+            coroutineScope {
+                widgetsToUpdate.forEachIndexed { index, (widgetClass, action) ->
+                    launch {
+                        updateWidget(appWidgetManager, widgetClass, action, index)
+                    }
                 }
             }
+            // All widget updates have been dispatched
 
             Result.success()
         } catch (e: Exception) {

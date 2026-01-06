@@ -1,121 +1,95 @@
 package com.example.mempal
 
 import android.Manifest
-import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ViewList
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Calculate
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.automirrored.filled.OpenInNew
-import androidx.compose.material3.*
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.Checkbox
-import androidx.compose.material3.CheckboxDefaults
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Switch
-import androidx.compose.runtime.*
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.livedata.observeAsState
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Popup
 import androidx.core.content.ContextCompat
+import androidx.core.net.toUri
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.lifecycleScope
-import com.example.mempal.api.FeeRates
-import com.example.mempal.api.HashrateInfo
-import com.example.mempal.api.MempoolInfo
 import com.example.mempal.api.NetworkClient
-import com.example.mempal.cache.DashboardCache
-import com.example.mempal.model.FeeRateType
-import com.example.mempal.model.NotificationSettings
 import com.example.mempal.repository.SettingsRepository
 import com.example.mempal.service.NotificationService
 import com.example.mempal.tor.TorManager
 import com.example.mempal.tor.TorStatus
+import com.example.mempal.ui.screens.AddressType
+import com.example.mempal.ui.screens.DashboardContent
+import com.example.mempal.ui.screens.FeeEstimatorScreen
+import com.example.mempal.ui.screens.NotificationsScreen
+import com.example.mempal.ui.screens.SettingsScreen
+import com.example.mempal.ui.screens.WelcomeDialog
 import com.example.mempal.ui.theme.AppColors
 import com.example.mempal.ui.theme.MempalTheme
 import com.example.mempal.viewmodel.DashboardUiState
 import com.example.mempal.viewmodel.MainViewModel
 import com.example.mempal.widget.WidgetUpdater
-import com.google.accompanist.swiperefresh.SwipeRefresh
-import com.google.accompanist.swiperefresh.SwipeRefreshIndicator
-import com.google.accompanist.swiperefresh.rememberSwipeRefreshState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import java.util.Locale
-import kotlin.math.abs
-import kotlin.math.ceil
-
-
-data class NotificationSectionConfig(
-    val title: String,
-    val description: String,
-    val enabled: Boolean,
-    val frequency: Int,
-    val onEnabledChange: (Boolean) -> Unit,
-    val onFrequencyChange: (Int) -> Unit
-)
-
-data class SpecificBlockConfig(
-    val enabled: Boolean,
-    val frequency: Int,
-    val targetHeight: Int?,
-    val onEnabledChange: (Boolean) -> Unit,
-    val onFrequencyChange: (Int) -> Unit,
-    val onTargetHeightChange: (Int?) -> Unit
-)
-
-data class NewBlockConfig(
-    val enabled: Boolean,
-    val frequency: Int,
-    val onEnabledChange: (Boolean) -> Unit,
-    val onFrequencyChange: (Int) -> Unit
-)
 
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
@@ -125,9 +99,18 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { isGranted: Boolean ->
         if (isGranted) {
-            // Permission granted, proceed with notifications
             val settings = settingsRepository.settings.value
-            if (settings.isServiceEnabled == true) {
+            if (settings.isServiceEnabled) {
+                // Validate settings before starting service
+                val validationError = validateNotificationSettings(settings)
+                if (validationError != null) {
+                    // Disable service if validation fails
+                    settingsRepository.updateSettings(settings.copy(isServiceEnabled = false))
+                    Toast.makeText(this, validationError, Toast.LENGTH_LONG).show()
+                    return@registerForActivityResult
+                }
+                
+                // Start or restart the service to ensure notification is shown
                 val serviceIntent = Intent(this, NotificationService::class.java)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     startForegroundService(serviceIntent)
@@ -136,9 +119,52 @@ class MainActivity : ComponentActivity() {
                 }
             }
         } else {
-            // Permission denied
+            // If permission was denied, disable the service since it can't run without permission
+            val currentSettings = settingsRepository.settings.value
+            if (currentSettings.isServiceEnabled) {
+                settingsRepository.updateSettings(currentSettings.copy(isServiceEnabled = false))
+            }
             Toast.makeText(this, "Notifications disabled", Toast.LENGTH_SHORT).show()
         }
+    }
+    
+    private fun validateNotificationSettings(settings: com.example.mempal.model.NotificationSettings): String? {
+        // Check Blocks notifications
+        if (settings.blockNotificationsEnabled) {
+            val hasNewBlock = settings.newBlockNotificationEnabled && settings.newBlockCheckFrequency > 0
+            val hasSpecificBlock = settings.specificBlockNotificationEnabled && 
+                    settings.specificBlockCheckFrequency > 0 && 
+                    settings.targetBlockHeight != null
+            
+            if (!hasNewBlock && !hasSpecificBlock) {
+                return "Please fill out required notification fields"
+            }
+        }
+        
+        // Check Fee Rates notifications
+        if (settings.feeRatesNotificationsEnabled) {
+            if (settings.feeRatesCheckFrequency <= 0 || settings.feeRateThreshold <= 0) {
+                return "Please fill out required notification fields"
+            }
+        }
+        
+        // Check Transaction Confirmation notifications
+        if (settings.txConfirmationEnabled) {
+            if (settings.transactionId.isEmpty() || 
+                settings.transactionId.length < 64 || 
+                settings.txConfirmationFrequency <= 0) {
+                return "Please fill out required notification fields"
+            }
+        }
+        
+        // Check Mempool Size notifications
+        if (settings.mempoolSizeNotificationsEnabled) {
+            if (settings.mempoolCheckFrequency <= 0 || settings.mempoolSizeThreshold <= 0) {
+                return "Please fill out required notification fields"
+            }
+        }
+        
+        return null // All validations passed
     }
 
     private fun handleNotificationPermissions() {
@@ -146,22 +172,18 @@ class MainActivity : ComponentActivity() {
             if (ContextCompat.checkSelfPermission(
                     this,
                     Manifest.permission.POST_NOTIFICATIONS
-                ) != PackageManager.PERMISSION_GRANTED
+                ) == PackageManager.PERMISSION_GRANTED
             ) {
-                requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-            } else {
-                // Permission granted, proceed with notifications
                 startNotificationServiceIfEnabled()
             }
         } else {
-            // For older versions, assume permission is granted
             startNotificationServiceIfEnabled()
         }
     }
 
     private fun startNotificationServiceIfEnabled() {
         val settings = settingsRepository.settings.value
-        if (settings.isServiceEnabled == true) {
+        if (settings.isServiceEnabled) {
             val serviceIntent = Intent(this, NotificationService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 startForegroundService(serviceIntent)
@@ -174,73 +196,74 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         val splashScreen = installSplashScreen()
         splashScreen.setKeepOnScreenCondition {
-            !NetworkClient.isInitialized.value // Hold splash screen until NetworkClient is initialized
+            !NetworkClient.isInitialized.value
         }
 
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
-        // Initialize NetworkClient and SettingsRepository
         NetworkClient.initialize(applicationContext)
         settingsRepository = SettingsRepository.getInstance(applicationContext)
+        
+        viewModel.setContext(applicationContext)
 
-        // Clear the server restart flag on app start
         settingsRepository.clearServerRestartFlag()
 
-        // Handle notification permissions
         handleNotificationPermissions()
 
-        // Add Tor connection event listener
         lifecycleScope.launch {
-            TorManager.getInstance().torConnectionEvent.collect { connected ->
-                if (connected && !viewModel.hasInitialData) {
-                    // Only refresh if we don't have data yet
-                    viewModel.refreshData()
-                }
-            }
-        }
-
-        // Restore notification service state
-        lifecycleScope.launch {
-            settingsRepository.settings.collect { settings ->
-                if (settings.isServiceEnabled) {
-                    val serviceIntent = Intent(this@MainActivity, NotificationService::class.java)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        startForegroundService(serviceIntent)
-                    } else {
-                        startService(serviceIntent)
+            // Tor connection events - refresh data when Tor connects
+            launch {
+                TorManager.getInstance().torConnectionEvent.collect { connected ->
+                    if (connected && !viewModel.hasInitialData) {
+                        val usePreciseFees = settingsRepository.settings.value.usePreciseFees
+                        viewModel.setUsePreciseFees(usePreciseFees)
+                        viewModel.refreshData(usePreciseFees, isManualRefresh = false)
                     }
                 }
             }
-        }
 
-        // In onCreate, after the existing NetworkClient initialization
-        lifecycleScope.launch {
-            // Wait for NetworkClient to be initialized
-            NetworkClient.isInitialized.collect { isInitialized ->
-                if (isInitialized) {
-                    NetworkClient.isNetworkAvailable.collect { isAvailable ->
-                        if (isAvailable) {
-                            viewModel.refreshData()
-                            // Also update widgets when network becomes available
-                            WidgetUpdater.requestImmediateUpdate(applicationContext)
+            // Settings changes - manage notification service
+            launch {
+                settingsRepository.settings.collect { settings ->
+                    if (settings.isServiceEnabled) {
+                        val serviceIntent = Intent(this@MainActivity, NotificationService::class.java)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            startForegroundService(serviceIntent)
+                        } else {
+                            startService(serviceIntent)
                         }
                     }
                 }
             }
-        }
 
-        // Add an observer for the dashboard data state
-        lifecycleScope.launch {
-            viewModel.uiState.collect { uiState ->
-                if (uiState is DashboardUiState.Success && !uiState.isCache) {
-                    // If we have fresh data, update the widgets
-                    WidgetUpdater.requestImmediateUpdate(applicationContext)
+            // Network state changes - combine isInitialized and isNetworkAvailable to avoid nested collectors
+            launch {
+                kotlinx.coroutines.flow.combine(
+                    NetworkClient.isInitialized,
+                    NetworkClient.isNetworkAvailable
+                ) { isInitialized, isAvailable -> 
+                    isInitialized && isAvailable 
+                }.collect { canRefresh ->
+                    if (canRefresh && viewModel.shouldAutoRefresh()) {
+                        val usePreciseFees = settingsRepository.settings.value.usePreciseFees
+                        viewModel.setUsePreciseFees(usePreciseFees)
+                        viewModel.refreshData(usePreciseFees, isManualRefresh = false)
+                        WidgetUpdater.requestImmediateUpdate(applicationContext)
+                    }
+                }
+            }
+
+            // UI state changes - update widgets on successful data fetch
+            launch {
+                viewModel.uiState.collect { uiState ->
+                    if (uiState is DashboardUiState.Success && !uiState.isCache) {
+                        WidgetUpdater.requestImmediateUpdate(applicationContext)
+                    }
                 }
             }
         }
 
-        // Check service state and update settings immediately
         updateServiceState()
 
         setContent {
@@ -252,29 +275,29 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Update service state on resume
         updateServiceState()
 
-        // Check and restore Tor connection if needed
         val torManager = TorManager.getInstance()
         torManager.checkAndRestoreTorConnection(applicationContext)
 
-        // Reinitialize network client if needed
         if (!NetworkClient.isInitialized.value) {
             NetworkClient.initialize(applicationContext)
         } else {
-            // Force a refresh of the dashboard data
+            // Update widgets without delay
+            try {
+                WidgetUpdater.requestImmediateUpdate(applicationContext)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            
+            // Delay and then check if refresh is needed (check AFTER delay to avoid race with init refresh)
             lifecycleScope.launch {
-                // Wait a bit for any network/Tor connections to stabilize
-                delay(1000)
-                viewModel.refreshData()
-                
-                // Also update all widgets when app is opened
-                try {
-                    WidgetUpdater.requestImmediateUpdate(applicationContext)
-                } catch (e: Exception) {
-                    // Just log any error, don't crash the app for widget updates
-                    e.printStackTrace()
+                delay(500)
+                // Check conditions after delay - ViewModel init may have already refreshed
+                if (!viewModel.hasInitialData || viewModel.shouldAutoRefresh()) {
+                    val usePreciseFees = settingsRepository.settings.value.usePreciseFees
+                    viewModel.setUsePreciseFees(usePreciseFees)
+                    viewModel.refreshData(usePreciseFees, isManualRefresh = false)
                 }
             }
         }
@@ -282,19 +305,16 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        // Clean up resources
         if (isFinishing) {
-            // Only cleanup if activity is actually being destroyed, not recreated
             NetworkClient.cleanup()
             SettingsRepository.cleanup()
-            TorManager.getInstance().cleanup()  // Add this line
+            TorManager.getInstance().cleanup()
             requestPermissionLauncher.unregister()
         }
     }
 
     private fun updateServiceState() {
         lifecycleScope.launch {
-            // Use the new method from NotificationService
             NotificationService.syncServiceState(applicationContext)
         }
     }
@@ -311,18 +331,35 @@ private fun MainScreen(viewModel: MainViewModel) {
     val activity = context as MainActivity
     val isRefreshing by viewModel.isMainRefreshing.collectAsState()
     val scope = rememberCoroutineScope()
+    val currentSettings by settingsRepository.settings.collectAsState()
+    
+    // Fee Estimator state (persists across tab switches)
+    var feeEstNumInputs by remember { mutableStateOf("1") }
+    var feeEstNumOutputs by remember { mutableStateOf("2") }
+    var feeEstAddressType by remember { mutableStateOf(AddressType.SEGWIT) }
+    var feeEstFeeRateOption by remember { mutableStateOf("") }
+    var feeEstCustomFeeRate by remember { mutableStateOf("") }
+    var feeEstIsMultisig by remember { mutableStateOf(false) }
+    var feeEstRequiredSigs by remember { mutableStateOf("2") }
+    var feeEstTotalKeys by remember { mutableStateOf("3") }
 
-    // Effect to handle tab changes and periodic refresh
+    LaunchedEffect(currentSettings.usePreciseFees) {
+        viewModel.setUsePreciseFees(currentSettings.usePreciseFees)
+    }
+
     LaunchedEffect(selectedTab) {
-        // Notify ViewModel of tab change
         viewModel.onTabSelected(selectedTab)
+    }
 
-        // Only set up periodic refresh for dashboard tab
-        if (selectedTab == 0) {
+    // Auto-refresh every 5 minutes when on dashboard tab
+    LaunchedEffect(selectedTab, isInitialized) {
+        if (selectedTab == 0 && isInitialized) {
             while (true) {
-                delay(300000) // 5 minute delay between refreshes
-                if (isInitialized) {
-                    viewModel.refreshData()
+                delay(300000) // 5 minutes
+                if (selectedTab == 0 && viewModel.shouldAutoRefresh()) {
+                    val usePreciseFees = settingsRepository.settings.value.usePreciseFees
+                    viewModel.setUsePreciseFees(usePreciseFees)
+                    viewModel.refreshData(usePreciseFees, isManualRefresh = false)
                 }
             }
         }
@@ -331,8 +368,8 @@ private fun MainScreen(viewModel: MainViewModel) {
     if (showWelcomeDialog) {
         WelcomeDialog(
             onDismiss = {
-                showWelcomeDialog = false
                 settingsRepository.setFirstLaunchComplete()
+                showWelcomeDialog = false
             }
         )
     }
@@ -383,6 +420,30 @@ private fun MainScreen(viewModel: MainViewModel) {
                         NavigationBarItem(
                             selected = selectedTab == 2,
                             onClick = { selectedTab = 2 },
+                            icon = { Icon(Icons.Default.Calculate, contentDescription = null) },
+                            label = {
+                                Box(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "Fee Estimator",
+                                        textAlign = TextAlign.Center,
+                                        maxLines = 2
+                                    )
+                                }
+                            },
+                            colors = NavigationBarItemDefaults.colors(
+                                selectedIconColor = AppColors.Orange,
+                                selectedTextColor = AppColors.Orange,
+                                indicatorColor = AppColors.DarkerNavy,
+                                unselectedIconColor = AppColors.DataGray,
+                                unselectedTextColor = AppColors.DataGray
+                            )
+                        )
+                        NavigationBarItem(
+                            selected = selectedTab == 3,
+                            onClick = { selectedTab = 3 },
                             icon = { Icon(Icons.Default.Settings, contentDescription = null) },
                             label = { Text("Settings") },
                             colors = NavigationBarItemDefaults.colors(
@@ -399,24 +460,26 @@ private fun MainScreen(viewModel: MainViewModel) {
         ) { paddingValues ->
             when (selectedTab) {
                 0 -> {
-                    Column(modifier = Modifier.fillMaxSize()) {
-                        AppHeader()
-                        
-                        // Use Accompanist SwipeRefresh
-                        SwipeRefresh(
-                            state = rememberSwipeRefreshState(isRefreshing),
+                    val pullToRefreshState = rememberPullToRefreshState()
+                    val blockHeight by viewModel.blockHeight.observeAsState()
+                    val feeRates by viewModel.feeRates.observeAsState()
+                    val hasData = blockHeight != null || feeRates != null
+                    val showInitialText = isRefreshing && !hasData
+                    
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        PullToRefreshBox(
+                            isRefreshing = isRefreshing,
                             onRefresh = { 
                                 scope.launch {
-                                    viewModel.refreshData()
+                                    val usePreciseFees = settingsRepository.settings.value.usePreciseFees
+                                    viewModel.setUsePreciseFees(usePreciseFees)
+                                    viewModel.refreshData(usePreciseFees, isManualRefresh = true)
                                 }
                             },
-                            indicator = { state, trigger ->
-                                SwipeRefreshIndicator(
-                                    state = state,
-                                    refreshTriggerDistance = trigger,
-                                    backgroundColor = AppColors.DarkerNavy,
-                                    contentColor = AppColors.Orange
-                                )
+                            modifier = Modifier.fillMaxSize(),
+                            state = pullToRefreshState,
+                            indicator = {
+                                Box(modifier = Modifier.size(0.dp))
                             }
                         ) {
                             Column(
@@ -424,11 +487,60 @@ private fun MainScreen(viewModel: MainViewModel) {
                                     .fillMaxSize()
                                     .verticalScroll(rememberScrollState())
                             ) {
-                                MainContent(
+                                AppHeader()
+                                DashboardContent(
                                     viewModel = viewModel,
                                     uiState = uiState,
-                                    modifier = Modifier.padding(paddingValues)
+                                    modifier = Modifier.padding(paddingValues),
+                                    pullToRefreshState = pullToRefreshState
                                 )
+                            }
+                        }
+                        
+                        if (isRefreshing) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .then(
+                                        if (showInitialText) {
+                                            Modifier.background(Color.Black.copy(alpha = 0.3f))
+                                        } else {
+                                            Modifier
+                                        }
+                                    ),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (showInitialText) {
+                                    Card(
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = AppColors.DarkerNavy
+                                        ),
+                                        modifier = Modifier.padding(24.dp)
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.padding(24.dp),
+                                            horizontalAlignment = Alignment.CenterHorizontally,
+                                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                                        ) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(48.dp),
+                                                color = AppColors.Orange,
+                                                strokeWidth = 4.dp
+                                            )
+                                            Text(
+                                                text = "Fetching data...",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                color = AppColors.DataGray
+                                            )
+                                        }
+                                    }
+                                } else {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(48.dp),
+                                        color = AppColors.Orange,
+                                        strokeWidth = 4.dp
+                                    )
+                                }
                             }
                         }
                     }
@@ -450,7 +562,37 @@ private fun MainScreen(viewModel: MainViewModel) {
                         .verticalScroll(rememberScrollState())
                 ) {
                     AppHeader()
-                    SettingsScreen(modifier = Modifier.padding(paddingValues))
+                    FeeEstimatorScreen(
+                        modifier = Modifier.padding(paddingValues),
+                        viewModel = viewModel,
+                        numInputs = feeEstNumInputs,
+                        onNumInputsChange = { feeEstNumInputs = it },
+                        numOutputs = feeEstNumOutputs,
+                        onNumOutputsChange = { feeEstNumOutputs = it },
+                        selectedAddressType = feeEstAddressType,
+                        onAddressTypeChange = { feeEstAddressType = it },
+                        selectedFeeRateOption = feeEstFeeRateOption,
+                        onFeeRateOptionChange = { feeEstFeeRateOption = it },
+                        customFeeRate = feeEstCustomFeeRate,
+                        onCustomFeeRateChange = { feeEstCustomFeeRate = it },
+                        isMultisig = feeEstIsMultisig,
+                        onMultisigChange = { feeEstIsMultisig = it },
+                        requiredSigs = feeEstRequiredSigs,
+                        onRequiredSigsChange = { feeEstRequiredSigs = it },
+                        totalKeys = feeEstTotalKeys,
+                        onTotalKeysChange = { feeEstTotalKeys = it }
+                    )
+                }
+                3 -> Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState())
+                ) {
+                    AppHeader()
+                    SettingsScreen(
+                        modifier = Modifier.padding(paddingValues),
+                        viewModel = viewModel
+                    )
                 }
             }
         }
@@ -459,11 +601,11 @@ private fun MainScreen(viewModel: MainViewModel) {
 
 @Composable
 private fun AppHeader() {
-    val torManager = remember { TorManager.getInstance() }
+    val torManager = TorManager.getInstance()
     val torStatus by torManager.torStatus.collectAsState()
-    val torEnabled = remember(torStatus) { torManager.isTorEnabled() }
+    val torEnabled = torManager.isTorEnabled()
     val context = LocalContext.current
-    val settingsRepository = remember { SettingsRepository.getInstance(context) }
+    val settingsRepository = SettingsRepository.getInstance(context)
 
     Box(
         modifier = Modifier
@@ -481,16 +623,13 @@ private fun AppHeader() {
                     try {
                         val currentUrl = settingsRepository.getApiUrl().trim()
 
-                        // Check if it's an onion address
                         if (currentUrl.contains(".onion")) {
-                            // Try Tor Browser first
-                            val torBrowserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(currentUrl)).apply {
+                            val torBrowserIntent = Intent(Intent.ACTION_VIEW, currentUrl.toUri()).apply {
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 setPackage("org.torproject.torbrowser")
                             }
 
-                            // Try Orbot Browser second
-                            val orbotBrowserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(currentUrl)).apply {
+                            val orbotBrowserIntent = Intent(Intent.ACTION_VIEW, currentUrl.toUri()).apply {
                                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                 setPackage("org.torproject.android")
                             }
@@ -515,8 +654,7 @@ private fun AppHeader() {
                                 ).show()
                             }
                         } else {
-                            // Regular URL handling
-                            val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse(currentUrl))
+                            val browserIntent = Intent(Intent.ACTION_VIEW, currentUrl.toUri())
                             browserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
 
                             if (browserIntent.resolveActivity(context.packageManager) != null) {
@@ -536,7 +674,6 @@ private fun AppHeader() {
                 }
         )
 
-        // Tor Status Indicator (moved to bottom end)
         if (torEnabled) {
             Box(
                 modifier = Modifier
@@ -588,2642 +725,4 @@ private fun AppHeader() {
             }
         }
     }
-}
-
-@Composable
-private fun MainContent(
-    viewModel: MainViewModel,
-    uiState: DashboardUiState,
-    modifier: Modifier = Modifier
-) {
-    val blockHeight by viewModel.blockHeight.observeAsState()
-    val blockTimestamp by viewModel.blockTimestamp.observeAsState()
-    val feeRates by viewModel.feeRates.observeAsState()
-    val mempoolInfo by viewModel.mempoolInfo.observeAsState()
-    val hashrateInfo by viewModel.hashrateInfo.observeAsState()
-    val isInitialized = NetworkClient.isInitialized.collectAsState()
-    val torManager = remember { TorManager.getInstance() }
-    val torStatus by torManager.torStatus.collectAsState()
-    val context = LocalContext.current
-    val settingsRepository = remember { SettingsRepository.getInstance(context) }
-    val isUsingOnion = remember(settingsRepository) { settingsRepository.getApiUrl().contains(".onion") }
-
-    // Effect to refresh data when Tor connects and we're using an onion address
-    LaunchedEffect(torStatus, isUsingOnion) {
-        if (isUsingOnion && torStatus == TorStatus.CONNECTED &&
-            (blockHeight == null || feeRates == null || mempoolInfo == null)) {
-            delay(100) // Small delay to ensure Tor circuit is ready
-            viewModel.refreshData()
-        }
-    }
-
-    // Effect to periodically check and refresh if data is missing
-    LaunchedEffect(Unit) {
-        while (true) {
-            if (isUsingOnion && torStatus == TorStatus.CONNECTED &&
-                (blockHeight == null || feeRates == null || mempoolInfo == null)) {
-                viewModel.refreshData()
-            }
-            delay(3000) // Check every 3 seconds
-        }
-    }
-
-    // Determine the appropriate message based on Tor connection and cache state
-    val statusMessage = when {
-        // If using onion and Tor is not connected
-        isUsingOnion && torStatus != TorStatus.CONNECTED -> {
-            if (DashboardCache.hasCachedData()) "Waiting for Tor connection..."
-            else "Connecting to Tor network..."
-        }
-
-        // If Tor is enabled and not connected or connecting
-        torManager.isTorEnabled() && (!isInitialized.value || torStatus == TorStatus.CONNECTING) -> {
-            if (DashboardCache.hasCachedData()) "Reconnecting to Tor network..."
-            else "Connecting to Tor network..."
-        }
-
-        // If not using Tor but network is not initialized
-        !torManager.isTorEnabled() && !isInitialized.value -> {
-            if (DashboardCache.hasCachedData()) "Reconnecting to server..."
-            else "Connecting to server..."
-        }
-
-        // For error states
-        uiState is DashboardUiState.Error -> {
-            if (torManager.isTorEnabled() &&
-                (uiState.message.contains("Connecting to Tor") || uiState.message.contains("Reconnecting to Tor"))) {
-                if (DashboardCache.hasCachedData()) "Reconnecting to Tor network..."
-                else "Connecting to Tor network..."
-            } else {
-                uiState.message
-            }
-        }
-
-        // For success states with cache
-        uiState is DashboardUiState.Success && uiState.isCache -> {
-            if (torManager.isTorEnabled()) {
-                if (DashboardCache.hasCachedData()) "Reconnecting to Tor network..."
-                else "Connecting to Tor network..."
-            } else {
-                if (DashboardCache.hasCachedData()) "Reconnecting to server..."
-                else "Connecting to server..."
-            }
-        }
-
-        // No message for other states
-        else -> null
-    }
-
-    when (uiState) {
-        is DashboardUiState.Error -> {
-            MainContentDisplay(
-                blockHeight = blockHeight,
-                blockTimestamp = blockTimestamp,
-                feeRates = feeRates,
-                mempoolInfo = mempoolInfo,
-                hashrateInfo = hashrateInfo,
-                modifier = modifier,
-                viewModel = viewModel,
-                statusMessage = statusMessage
-            )
-        }
-        is DashboardUiState.Success -> {
-            MainContentDisplay(
-                blockHeight = blockHeight,
-                blockTimestamp = blockTimestamp,
-                feeRates = feeRates,
-                mempoolInfo = mempoolInfo,
-                hashrateInfo = hashrateInfo,
-                modifier = modifier,
-                viewModel = viewModel,
-                statusMessage = statusMessage
-            )
-        }
-        DashboardUiState.Loading -> {
-            MainContentDisplay(
-                blockHeight = blockHeight,
-                blockTimestamp = blockTimestamp,
-                feeRates = feeRates,
-                mempoolInfo = mempoolInfo,
-                hashrateInfo = hashrateInfo,
-                modifier = modifier,
-                viewModel = viewModel,
-                statusMessage = statusMessage
-            )
-        }
-    }
-}
-
-@Composable
-private fun MainContentDisplay(
-    blockHeight: Int?,
-    blockTimestamp: Long?,
-    feeRates: FeeRates?,
-    mempoolInfo: MempoolInfo?,
-    hashrateInfo: HashrateInfo?,
-    modifier: Modifier = Modifier,
-    viewModel: MainViewModel? = null,
-    statusMessage: String? = null
-) {
-    val isInitialized = NetworkClient.isInitialized.collectAsState()
-    val isMainRefreshing by viewModel?.isMainRefreshing?.collectAsState() ?: remember { mutableStateOf(false) }
-    val context = LocalContext.current
-    val settingsRepository = remember { SettingsRepository.getInstance(context) }
-    var visibleCards by remember { mutableStateOf(settingsRepository.getVisibleCards()) }
-    var isRefreshing by remember { mutableStateOf(false) }
-    var lastRefreshTime by remember { mutableLongStateOf(0L) }
-
-    // Reset refresh state after a delay
-    LaunchedEffect(isRefreshing) {
-        if (isRefreshing) {
-            delay(10) // Wait for 10ms
-            isRefreshing = false
-        }
-    }
-
-    // Common refresh function for all cards
-    val refreshAll = {
-        if (!isMainRefreshing && isInitialized.value) {
-            val currentTime = System.currentTimeMillis()
-            if (currentTime - lastRefreshTime >= 5000) {
-                isRefreshing = true
-                lastRefreshTime = currentTime
-                viewModel?.refreshData()
-            }
-        }
-    }
-
-    // Update visible cards when they change in settings
-    LaunchedEffect(Unit) {
-        visibleCards = settingsRepository.getVisibleCards()
-    }
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(horizontal = 12.dp)
-            .padding(bottom = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(4.dp)
-    ) {
-        // Status message at the top
-        if (!statusMessage.isNullOrEmpty()) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = AppColors.DarkerNavy
-                )
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    CircularProgressIndicator(
-                        modifier = Modifier
-                            .size(16.dp)
-                            .padding(end = 8.dp),
-                        color = AppColors.Orange,
-                        strokeWidth = 2.dp
-                    )
-                    Text(
-                        text = statusMessage,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = AppColors.DataGray
-                    )
-                }
-            }
-            Spacer(modifier = Modifier.height(4.dp))
-        }
-
-        // Conditionally render cards based on user preferences
-        if ("Block Height" in visibleCards) {
-            DataCard(
-                title = "Block Height",
-                icon = Icons.Default.Numbers,
-                content = blockHeight?.let {
-                    {
-                        Column {
-                            Text(
-                                text = String.format(Locale.US, "%,d", it),
-                                style = MaterialTheme.typography.headlineLarge,
-                                color = AppColors.DataGray
-                            )
-                            blockTimestamp?.let { timestamp ->
-                                val elapsedMinutes = (System.currentTimeMillis() / 1000 - timestamp) / 60
-                                Text(
-                                    text = "$elapsedMinutes ${if (elapsedMinutes == 1L) "minute" else "minutes"} ago",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = AppColors.DataGray.copy(alpha = 0.7f)
-                                )
-                            }
-                        }
-                    }
-                },
-                isLoading = blockHeight == null,
-                onRefresh = refreshAll,
-                isRefreshing = isRefreshing || isMainRefreshing
-            )
-        }
-
-        if ("Hashrate" in visibleCards) {
-            DataCard(
-                title = "Hashrate",
-                icon = Icons.Default.Memory,
-                content = {
-                    if (hashrateInfo != null) {
-                        Column {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = formatHashrate(hashrateInfo.currentHashrate),
-                                    style = MaterialTheme.typography.headlineLarge,
-                                    color = AppColors.DataGray
-                                )
-                            }
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = "Difficulty: ${formatDifficulty(hashrateInfo.currentDifficulty)}",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = AppColors.DataGray.copy(alpha = 0.7f)
-                                )
-                                // Difficulty Adjustment Info
-                                viewModel?.difficultyAdjustment?.value?.let { adjustment ->
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                    ) {
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(0.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = if (adjustment.difficultyChange >= 0) Icons.Default.ArrowUpward else Icons.Default.ArrowDownward,
-                                                contentDescription = if (adjustment.difficultyChange >= 0) "Difficulty increasing" else "Difficulty decreasing",
-                                                tint = if (adjustment.difficultyChange >= 0) Color(0xFF4CAF50) else Color(0xFFE57373),
-                                                modifier = Modifier.size(14.dp)
-                                            )
-                                            Text(
-                                                text = String.format(Locale.getDefault(), "%.2f%%", abs(adjustment.difficultyChange)),
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = if (adjustment.difficultyChange >= 0) Color(0xFF4CAF50) else Color(0xFFE57373)
-                                            )
-                                        }
-                                        Text(
-                                            text = "in " + String.format(Locale.US, "%,d", adjustment.remainingBlocks) + " blocks",
-                                            style = MaterialTheme.typography.bodyMedium,
-                                            color = AppColors.DataGray.copy(alpha = 0.7f)
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        Text(
-                            text = "Loading...",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = AppColors.DataGray.copy(alpha = 0.6f)
-                        )
-                    }
-                },
-                isLoading = hashrateInfo == null,
-                onRefresh = refreshAll,
-                isRefreshing = isRefreshing || isMainRefreshing
-            )
-        }
-
-        if ("Mempool Size" in visibleCards) {
-            DataCard(
-                title = "Mempool Size",
-                icon = Icons.Default.Speed,
-                content = mempoolInfo?.let {
-                    {
-                        Column {
-                            Text(
-                                text = String.format(Locale.US, "%.2f vMB", it.vsize / 1_000_000.0),
-                                style = MaterialTheme.typography.headlineLarge,
-                                color = AppColors.DataGray
-                            )
-                            val blocksToClean = ceil(it.vsize / 1_000_000.0 / 1.5).toInt()
-                            Text(
-                                text = "$blocksToClean ${if (blocksToClean == 1) "block" else "blocks"} to clear",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = AppColors.DataGray.copy(alpha = 0.7f)
-                            )
-                        }
-                    }
-                },
-                isLoading = mempoolInfo == null,
-                onRefresh = refreshAll,
-                isRefreshing = isRefreshing || isMainRefreshing
-            )
-        }
-
-        if ("Fee Rates" in visibleCards) {
-            DataCard(
-                title = "Fee Rates",
-                content = feeRates?.let { { FeeRatesContent(it) } },
-                icon = Icons.Default.Timeline,
-                tooltip = "This section shows the average recommended fee rate with estimated confirmation times." +
-                        "\n\nNOTE: The mempool can sometimes experience a flood of transactions, leading to drastically higher fees. " +
-                        "These floods are often only a few vMB and clear quickly. To avoid overpaying fees, use the " +
-                        "\"Fee Distribution\" table to gauge the size and clearing time of the flood.",
-                isLoading = feeRates == null,
-                onRefresh = refreshAll,
-                isRefreshing = isRefreshing || isMainRefreshing
-            )
-        }
-
-        if ("Fee Distribution" in visibleCards) {
-            DataCard(
-                title = "Fee Distribution",
-                content = mempoolInfo?.let { { HistogramContent(it) } },
-                icon = Icons.Default.BarChart,
-                tooltip = "This section shows a detailed breakdown of the mempool. Fee ranges are shown on the left and " +
-                        "the cumulative size of transactions on the right" +
-                        "\n\nRange Key:" +
-                        "\n- Green will confirm in the next block." +
-                        "\n- Yellow might confirm in the next block." +
-                        "\n- Red will not confirm in the next block." +
-                        "\n\nNOTE: Each Bitcoin block confirms about 1.5 vMB worth of transactions.",
-                warningTooltip = if (mempoolInfo?.isUsingFallbackHistogram == true) {
-                    "Your custom server doesn't provide fee distribution data. " +
-                            "We're using mempool.space as a fallback source for this information."
-                } else null,
-                isLoading = mempoolInfo == null,
-                onRefresh = refreshAll,
-                isRefreshing = isRefreshing || isMainRefreshing
-            )
-        }
-    }
-}
-
-@Composable
-private fun DataCard(
-    title: String,
-    icon: ImageVector,
-    modifier: Modifier = Modifier,
-    value: String? = null,
-    content: (@Composable () -> Unit)? = null,
-    tooltip: String? = null,
-    warningTooltip: String? = null,
-    isLoading: Boolean = value == null && content == null,
-    onRefresh: (() -> Unit)? = null,
-    isRefreshing: Boolean = false
-) {
-    Card(
-        modifier = modifier
-            .fillMaxWidth()
-            .clickable(
-                indication = null, // Remove ripple animation
-                interactionSource = remember { MutableInteractionSource() } // Required to remove ripple
-            ) {
-                if (!isLoading && !isRefreshing) {
-                    onRefresh?.invoke()
-                }
-            },
-        colors = CardDefaults.cardColors(
-            containerColor = AppColors.DarkerNavy
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp)
-                .graphicsLayer(alpha = if (isRefreshing) 0.5f else 1f),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Icon(
-                    imageVector = icon,
-                    contentDescription = null,
-                    tint = AppColors.Orange,
-                    modifier = Modifier.size(24.dp)
-                )
-                Spacer(modifier = Modifier.width(8.dp))
-                Text(
-                    text = title,
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = AppColors.Orange
-                )
-                if (tooltip != null) {
-                    Spacer(modifier = Modifier.width(4.dp))
-                    TooltipButton(tooltip = tooltip)
-                }
-                if (warningTooltip != null) {
-                    Spacer(modifier = Modifier.weight(1f))
-                    TooltipButton(
-                        tooltip = warningTooltip,
-                        icon = Icons.Default.Warning,
-                        tint = AppColors.Orange
-                    )
-                }
-            }
-
-            if (value != null) {
-                Text(
-                    text = value,
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = AppColors.DataGray
-                )
-            } else if (content != null) {
-                content()
-            } else if (isLoading) {
-                Text(
-                    text = "Loading...",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = AppColors.DataGray.copy(alpha = 0.6f)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun TooltipButton(
-    tooltip: @Composable () -> Unit,
-    icon: ImageVector = Icons.Default.Info,
-    tint: Color = MaterialTheme.colorScheme.onSurface
-) {
-    var showTooltip by remember { mutableStateOf(false) }
-    Box {
-        IconButton(
-            onClick = { showTooltip = !showTooltip },
-            modifier = Modifier.size(34.dp)
-        ) {
-            Icon(
-                imageVector = icon,
-                contentDescription = "Info",
-                modifier = Modifier.size(22.dp),
-                tint = tint
-            )
-        }
-        if (showTooltip) {
-            Popup(
-                onDismissRequest = { showTooltip = false },
-                alignment = Alignment.BottomStart
-            ) {
-                Surface(
-                    modifier = Modifier.padding(8.dp),
-                    shape = MaterialTheme.shapes.medium,
-                    color = AppColors.DarkGray,
-                    tonalElevation = 4.dp
-                ) {
-                    Box(modifier = Modifier.padding(12.dp)) {
-                        tooltip()
-                    }
-                }
-            }
-        }
-    }
-}
-
-// Add an overload for string tooltips to maintain compatibility with existing usage
-@Composable
-private fun TooltipButton(
-    tooltip: String,
-    icon: ImageVector = Icons.Default.Info,
-    tint: Color = MaterialTheme.colorScheme.onSurface
-) {
-    TooltipButton(
-        tooltip = {
-            Text(
-                text = tooltip,
-                style = MaterialTheme.typography.bodyLarge,
-                color = Color.White
-            )
-        },
-        icon = icon,
-        tint = tint
-    )
-}
-
-@Composable
-private fun FeeRatesContent(feeRates: FeeRates) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        FeeRateRow("Next Block", feeRates.fastestFee)
-        FeeRateRow("In 3 Blocks", feeRates.halfHourFee)
-        FeeRateRow("In 6 Blocks", feeRates.hourFee)
-        FeeRateRow("In 1 Day", feeRates.economyFee)
-    }
-}
-
-@Composable
-private fun FeeRateRow(
-    label: String,
-    value: Int?,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = if (value != null) "$value" else "...",
-                style = MaterialTheme.typography.titleLarge,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            if (value != null) {
-                Text(
-                    text = "sat/vB",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun HistogramContent(mempoolInfo: MempoolInfo) {
-    // Remember the last valid histogram data
-    var lastValidHistogram by remember { mutableStateOf<List<List<Double>>>(emptyList()) }
-
-    // Update last valid histogram when we get new data
-    LaunchedEffect(mempoolInfo.feeHistogram) {
-        if (mempoolInfo.feeHistogram.isNotEmpty()) {
-            lastValidHistogram = mempoolInfo.feeHistogram
-        }
-    }
-
-    // Use either current or last valid histogram data
-    val histogramToDisplay = if (mempoolInfo.feeHistogram.isNotEmpty()) {
-        mempoolInfo.feeHistogram
-    } else {
-        lastValidHistogram
-    }
-
-    Column(
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        if (histogramToDisplay.isNotEmpty()) {
-            // Header row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = "Range (sat/vB)",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                    fontFamily = FontFamily.Default
-                )
-                Text(
-                    text = "Sum",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                    fontFamily = FontFamily.Default
-                )
-            }
-
-            HorizontalDivider(
-                modifier = Modifier.padding(vertical = 4.dp),
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
-            )
-
-            // Process and show histogram data
-            val sizeMap = mutableMapOf<String, Double>()
-            var totalSize = 0.0
-
-            // Process the raw data first
-            histogramToDisplay.forEach { feeRange ->
-                if (feeRange.size >= 2) {
-                    val fee = feeRange[0].toInt()
-                    val size = feeRange[1]
-
-                    // Generate range string based on fee value
-                    val rangeStr = when {
-                        fee >= 2000 -> "2000+"
-                        fee >= 1800 -> "1800 - 2000"
-                        fee >= 1600 -> "1600 - 1800"
-                        fee >= 1400 -> "1400 - 1600"
-                        fee >= 1200 -> "1200 - 1400"
-                        fee >= 1000 -> "1000 - 1200"
-                        fee >= 900 -> "900 - 1000"
-                        fee >= 800 -> "800 - 900"
-                        fee >= 700 -> "700 - 800"
-                        fee >= 600 -> "600 - 700"
-                        fee >= 500 -> "500 - 600"
-                        fee >= 450 -> "450 - 500"
-                        fee >= 400 -> "400 - 450"
-                        fee >= 350 -> "350 - 400"
-                        fee >= 300 -> "300 - 350"
-                        fee >= 275 -> "275 - 300"
-                        fee >= 250 -> "250 - 275"
-                        fee >= 225 -> "225 - 250"
-                        fee >= 200 -> "200 - 225"
-                        fee >= 180 -> "180 - 200"
-                        fee >= 160 -> "160 - 180"
-                        fee >= 140 -> "140 - 160"
-                        fee >= 120 -> "120 - 140"
-                        fee >= 100 -> "100 - 120"
-                        fee >= 90 -> "90 - 100"
-                        fee >= 80 -> "80 - 90"
-                        fee >= 70 -> "70 - 80"
-                        fee >= 60 -> "60 - 70"
-                        fee >= 55 -> "55 - 60"
-                        fee >= 50 -> "50 - 55"
-                        fee >= 45 -> "45 - 50"
-                        fee >= 40 -> "40 - 45"
-                        fee >= 38 -> "38 - 40"
-                        fee >= 36 -> "36 - 38"
-                        fee >= 34 -> "34 - 36"
-                        fee >= 32 -> "32 - 34"
-                        fee >= 30 -> "30 - 32"
-                        fee >= 28 -> "28 - 30"
-                        fee >= 26 -> "26 - 28"
-                        fee >= 24 -> "24 - 26"
-                        fee >= 22 -> "22 - 24"
-                        fee >= 20 -> "20 - 22"
-                        fee >= 19 -> "19 - 20"
-                        fee >= 18 -> "18 - 19"
-                        fee >= 17 -> "17 - 18"
-                        fee >= 16 -> "16 - 17"
-                        fee >= 15 -> "15 - 16"
-                        fee >= 14 -> "14 - 15"
-                        fee >= 13 -> "13 - 14"
-                        fee >= 12 -> "12 - 13"
-                        fee >= 11 -> "11 - 12"
-                        fee >= 10 -> "10 - 11"
-                        fee >= 9 -> "9 - 10"
-                        fee >= 8 -> "8 - 9"
-                        fee >= 7 -> "7 - 8"
-                        fee >= 6 -> "6 - 7"
-                        fee >= 5 -> "5 - 6"
-                        fee >= 4 -> "4 - 5"
-                        fee >= 3 -> "3 - 4"
-                        fee >= 2 -> "2 - 3"
-                        fee >= 1 -> "1 - 2"
-                        else -> "0 - 1"
-                    }
-
-                    sizeMap[rangeStr] = (sizeMap[rangeStr] ?: 0.0) + size
-                    totalSize += size
-                }
-            }
-
-            // Filter out zero entries and sort by fee range
-            val nonZeroEntries = sizeMap.entries
-                .filter { it.value > 0 }
-                .sortedByDescending { entry ->
-                    when {
-                        entry.key.endsWith("+") -> entry.key.removeSuffix("+").toInt()
-                        else -> entry.key.split(" - ").first().toInt()
-                    }
-                }
-
-            // Calculate running sum and show entries
-            var runningSum = 0.0
-            nonZeroEntries.forEach { entry ->
-                runningSum += entry.value
-                val sumInMB = runningSum / 1_000_000
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Text(
-                        text = entry.key,
-                        style = MaterialTheme.typography.titleLarge,
-                        color = when {
-                            sumInMB > 1.5 -> AppColors.WarningRed
-                            sumInMB > 1.2 -> Color(0xFFFFA500) // Orange/Yellow color
-                            else -> Color(0xFF4CAF50) // Green color
-                        },
-                        fontFamily = FontFamily.Default
-                    )
-                    Text(
-                        text = String.format(Locale.US, "%.2f vMB", sumInMB),
-                        style = MaterialTheme.typography.titleLarge,
-                        color = when {
-                            sumInMB > 1.5 -> AppColors.WarningRed
-                            sumInMB > 1.2 -> Color(0xFFFFA500) // Orange/Yellow color
-                            else -> Color(0xFF4CAF50) // Green color
-                        },
-                        fontFamily = FontFamily.Default
-                    )
-                }
-            }
-
-            HorizontalDivider(
-                modifier = Modifier.padding(vertical = 8.dp),
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
-            )
-        } else {
-            // Loading state - align with header text
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = "Loading...",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = AppColors.DataGray.copy(alpha = 0.6f)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun NotificationsScreen(
-    modifier: Modifier = Modifier,
-    requestPermissionLauncher: ActivityResultLauncher<String>
-) {
-    val context = LocalContext.current
-    val settingsRepository = remember { SettingsRepository.getInstance(context) }
-    val settings by settingsRepository.settings.collectAsState(NotificationSettings())
-
-    // Check if any notification type is enabled
-    val isAnyNotificationEnabled = settings.run {
-        blockNotificationsEnabled && (newBlockNotificationEnabled || specificBlockNotificationEnabled) ||
-                mempoolSizeNotificationsEnabled ||
-                feeRatesNotificationsEnabled ||
-                (txConfirmationEnabled && transactionId.isNotEmpty())
-    }
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(horizontal = 12.dp)
-            .padding(bottom = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)  // Changed from 12.dp to 6.dp
-    ) {
-        Button(
-            onClick = {
-                if (!settings.isServiceEnabled) {
-                    // Check notification permission before enabling service
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        if (ContextCompat.checkSelfPermission(
-                                context,
-                                Manifest.permission.POST_NOTIFICATIONS
-                            ) != PackageManager.PERMISSION_GRANTED
-                        ) {
-                            requestPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-                            return@Button
-                        }
-                    }
-                    val serviceIntent = Intent(context, NotificationService::class.java)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        context.startForegroundService(serviceIntent)
-                    } else {
-                        context.startService(serviceIntent)
-                    }
-                    settingsRepository.updateSettings(settings.copy(isServiceEnabled = true))
-                } else {
-                    val serviceIntent = Intent(context, NotificationService::class.java)
-                    context.stopService(serviceIntent)
-                    settingsRepository.updateSettings(settings.copy(isServiceEnabled = false))
-                }
-            },
-            modifier = Modifier
-                .fillMaxWidth(0.95f)
-                .align(Alignment.CenterHorizontally),
-            enabled = settings.isServiceEnabled || isAnyNotificationEnabled,
-            colors = ButtonDefaults.buttonColors(
-                containerColor = if (settings.isServiceEnabled) AppColors.WarningRed else AppColors.Orange,
-                disabledContainerColor = AppColors.Orange.copy(alpha = 0.5f)
-            )
-        ) {
-            Text(
-                text = if (settings.isServiceEnabled) "Stop Notification Service" else "Start Notification Service",
-                style = MaterialTheme.typography.titleMedium,
-                color = Color.White.copy(alpha = if (settings.isServiceEnabled || isAnyNotificationEnabled) 1f else 0.5f)
-            )
-        }
-
-        // Add this effect to monitor notification states
-        LaunchedEffect(
-            settings.blockNotificationsEnabled,
-            settings.newBlockNotificationEnabled,
-            settings.specificBlockNotificationEnabled,
-            settings.mempoolSizeNotificationsEnabled,
-            settings.feeRatesNotificationsEnabled,
-            settings.txConfirmationEnabled,
-            settings.transactionId
-        ) {
-            // Check if any notifications are enabled
-            val isAnyEnabled = settings.run {
-                blockNotificationsEnabled && (newBlockNotificationEnabled || specificBlockNotificationEnabled) ||
-                        mempoolSizeNotificationsEnabled ||
-                        feeRatesNotificationsEnabled ||
-                        (txConfirmationEnabled && transactionId.isNotEmpty())
-            }
-
-            // If no notifications are enabled but service is running, stop it
-            if (!isAnyEnabled && settings.isServiceEnabled) {
-                val serviceIntent = Intent(context, NotificationService::class.java)
-                context.stopService(serviceIntent)
-                settingsRepository.updateSettings(settings.copy(isServiceEnabled = false))
-            }
-        }
-
-        // Bitcoin Blocks section
-        NotificationSection(
-            config = NotificationSectionConfig(
-                title = "Blocks",
-                description = "Get notified when blocks are mined.",
-                enabled = settings.blockNotificationsEnabled,
-                frequency = settings.blockCheckFrequency,
-                onEnabledChange = { newSettings ->
-                    settingsRepository.updateSettings(settings.copy(blockNotificationsEnabled = newSettings))
-                },
-                onFrequencyChange = { newSettings ->
-                    settingsRepository.updateSettings(settings.copy(blockCheckFrequency = newSettings))
-                }
-            ),
-            newBlockConfig = NewBlockConfig(
-                enabled = settings.newBlockNotificationEnabled,
-                frequency = settings.newBlockCheckFrequency,
-                onEnabledChange = { newSettings ->
-                    settingsRepository.updateSettings(settings.copy(
-                        newBlockNotificationEnabled = newSettings,
-                        hasNotifiedForNewBlock = false
-                    ))
-                },
-                onFrequencyChange = { newFrequency ->
-                    settingsRepository.updateSettings(settings.copy(
-                        newBlockCheckFrequency = newFrequency,
-                        hasNotifiedForNewBlock = false
-                    ))
-                }
-            ),
-            specificBlockConfig = SpecificBlockConfig(
-                enabled = settings.specificBlockNotificationEnabled,
-                frequency = settings.specificBlockCheckFrequency,
-                targetHeight = settings.targetBlockHeight,
-                onEnabledChange = { newSettings ->
-                    settingsRepository.updateSettings(settings.copy(
-                        specificBlockNotificationEnabled = newSettings,
-                        hasNotifiedForTargetBlock = false
-                    ))
-                },
-                onFrequencyChange = { newFrequency ->
-                    settingsRepository.updateSettings(settings.copy(
-                        specificBlockCheckFrequency = newFrequency,
-                        hasNotifiedForTargetBlock = false
-                    ))
-                },
-                onTargetHeightChange = { newHeight ->
-                    settingsRepository.updateSettings(settings.copy(
-                        targetBlockHeight = newHeight,
-                        hasNotifiedForTargetBlock = false
-                    ))
-                }
-            )
-        )
-
-        // Fee Rates section
-        FeeRatesNotificationSection(
-            enabled = settings.feeRatesNotificationsEnabled,
-            frequency = settings.feeRatesCheckFrequency,
-            selectedFeeRateType = settings.selectedFeeRateType,
-            threshold = settings.feeRateThreshold,
-            isAboveThreshold = settings.feeRateAboveThreshold,
-            onEnabledChange = { newSettings ->
-                settingsRepository.updateSettings(settings.copy(feeRatesNotificationsEnabled = newSettings))
-            },
-            onFrequencyChange = { newSettings ->
-                settingsRepository.updateSettings(settings.copy(feeRatesCheckFrequency = newSettings))
-            },
-            onFeeRateTypeChange = { newType ->
-                settingsRepository.updateSettings(
-                    settings.copy(
-                        selectedFeeRateType = newType,
-                        hasNotifiedForFeeRate = false
-                    )
-                )
-            },
-            onThresholdChange = { newThreshold ->
-                settingsRepository.updateSettings(
-                    settings.copy(
-                        feeRateThreshold = newThreshold,
-                        hasNotifiedForFeeRate = false
-                    )
-                )
-            },
-            onAboveThresholdChange = { isAbove ->
-                settingsRepository.updateSettings(
-                    settings.copy(
-                        feeRateAboveThreshold = isAbove,
-                        hasNotifiedForFeeRate = false
-                    )
-                )
-            }
-        )
-
-        // Transaction Confirmation section
-        TransactionConfirmationSection(
-            enabled = settings.txConfirmationEnabled,
-            frequency = settings.txConfirmationFrequency,
-            transactionId = settings.transactionId,
-            onEnabledChange = { newSettings ->
-                settingsRepository.updateSettings(settings.copy(txConfirmationEnabled = newSettings))
-            },
-            onFrequencyChange = { newSettings ->
-                settingsRepository.updateSettings(settings.copy(txConfirmationFrequency = newSettings))
-            },
-            onTransactionIdChange = { newTxId ->
-                settingsRepository.updateSettings(
-                    settings.copy(
-                        transactionId = newTxId,
-                        hasNotifiedForCurrentTx = false
-                    )
-                )
-            }
-        )
-
-        // Mempool Size section (moved to bottom)
-        MempoolSizeNotificationSection(
-            enabled = settings.mempoolSizeNotificationsEnabled,
-            frequency = settings.mempoolCheckFrequency,
-            threshold = settings.mempoolSizeThreshold,
-            aboveThreshold = settings.mempoolSizeAboveThreshold,
-            onEnabledChange = { newSettings ->
-                settingsRepository.updateSettings(settings.copy(mempoolSizeNotificationsEnabled = newSettings))
-            },
-            onFrequencyChange = { newSettings ->
-                settingsRepository.updateSettings(settings.copy(mempoolCheckFrequency = newSettings))
-            },
-            onThresholdChange = { newThreshold ->
-                settingsRepository.updateSettings(
-                    settings.copy(
-                        mempoolSizeThreshold = newThreshold,
-                        hasNotifiedForMempoolSize = false
-                    )
-                )
-            },
-            onAboveThresholdChange = { isAbove ->
-                settingsRepository.updateSettings(
-                    settings.copy(
-                        mempoolSizeAboveThreshold = isAbove,
-                        hasNotifiedForMempoolSize = false
-                    )
-                )
-            }
-        )
-    }
-}
-
-@Composable
-private fun NotificationSection(
-    config: NotificationSectionConfig,
-    newBlockConfig: NewBlockConfig? = null,
-    specificBlockConfig: SpecificBlockConfig? = null
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = AppColors.DarkerNavy
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = config.title,
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = AppColors.Orange
-                )
-                Switch(
-                    checked = config.enabled,
-                    onCheckedChange = config.onEnabledChange,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = AppColors.Orange,
-                        uncheckedThumbColor = Color.Gray,
-                        uncheckedTrackColor = AppColors.DarkerNavy,
-                        checkedBorderColor = AppColors.Orange,
-                        uncheckedBorderColor = Color.Gray
-                    )
-                )
-            }
-            Text(
-                text = config.description,
-                style = MaterialTheme.typography.titleMedium,
-                color = AppColors.DataGray
-            )
-
-            if (config.enabled && newBlockConfig != null) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "New Block Alert",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = AppColors.DataGray
-                            )
-                            Text(
-                                text = "When a new block is mined.",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = AppColors.DataGray.copy(alpha = 0.7f)
-                            )
-                        }
-                        Switch(
-                            checked = newBlockConfig.enabled,
-                            onCheckedChange = newBlockConfig.onEnabledChange,
-                            modifier = Modifier.scale(0.8f),
-                            colors = SwitchDefaults.colors(
-                                checkedThumbColor = Color.White,
-                                checkedTrackColor = AppColors.Orange,
-                                checkedBorderColor = AppColors.Orange,
-                                uncheckedThumbColor = Color.Gray,
-                                uncheckedTrackColor = AppColors.DarkerNavy,
-                                uncheckedBorderColor = Color.Gray
-                            )
-                        )
-                    }
-
-                    if (newBlockConfig.enabled) {
-                        NumericTextField(
-                            value = if (newBlockConfig.frequency == 0) "" else newBlockConfig.frequency.toString(),
-                            onValueChange = {
-                                newBlockConfig.onFrequencyChange(if (it.isEmpty()) 0 else it.toIntOrNull() ?: 0)
-                            },
-                            label = "Check Interval (minutes)"
-                        )
-                    }
-                }
-
-                // Specific Block Height Section
-                if (specificBlockConfig != null) {
-                    HorizontalDivider(
-                        modifier = Modifier.padding(vertical = 8.dp),
-                        color = AppColors.DataGray.copy(alpha = 0.5f)
-                    )
-
-                    Column(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "Block Height Alert",
-                                    style = MaterialTheme.typography.titleMedium,
-                                    color = AppColors.DataGray
-                                )
-                                Text(
-                                    text = "When a specific block height is reached.",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = AppColors.DataGray.copy(alpha = 0.7f)
-                                )
-                            }
-                            Switch(
-                                checked = specificBlockConfig.enabled,
-                                onCheckedChange = specificBlockConfig.onEnabledChange,
-                                modifier = Modifier.scale(0.8f),
-                                colors = SwitchDefaults.colors(
-                                    checkedThumbColor = Color.White,
-                                    checkedTrackColor = AppColors.Orange,
-                                    checkedBorderColor = AppColors.Orange,
-                                    uncheckedThumbColor = Color.Gray,
-                                    uncheckedTrackColor = AppColors.DarkerNavy,
-                                    uncheckedBorderColor = Color.Gray
-                                )
-                            )
-                        }
-
-                        if (specificBlockConfig.enabled) {
-                            var debouncedBlockHeight by remember(specificBlockConfig.targetHeight) {
-                                mutableStateOf(specificBlockConfig.targetHeight?.toString() ?: "")
-                            }
-
-                            NumericTextField(
-                                value = debouncedBlockHeight,
-                                onValueChange = { newValue ->
-                                    debouncedBlockHeight = newValue
-                                    if (newValue.isEmpty()) {
-                                        specificBlockConfig.onTargetHeightChange(null)
-                                    } else {
-                                        newValue.toIntOrNull()?.let { value ->
-                                            if (value > 0) {
-                                                specificBlockConfig.onTargetHeightChange(value)
-                                            }
-                                        }
-                                    }
-                                },
-                                label = "Target Block Height"
-                            )
-
-                            NumericTextField(
-                                value = if (specificBlockConfig.frequency == 0) "" else specificBlockConfig.frequency.toString(),
-                                onValueChange = {
-                                    specificBlockConfig.onFrequencyChange(if (it.isEmpty()) 0 else it.toIntOrNull() ?: 0)
-                                },
-                                label = "Check Interval (minutes)"
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun MempoolSizeNotificationSection(
-    enabled: Boolean,
-    frequency: Int,
-    threshold: Float,
-    aboveThreshold: Boolean,
-    onEnabledChange: (Boolean) -> Unit,
-    onFrequencyChange: (Int) -> Unit,
-    onThresholdChange: (Float) -> Unit,
-    onAboveThresholdChange: (Boolean) -> Unit
-) {
-    var debouncedThreshold by remember(threshold) { mutableStateOf(if (threshold == 0f) "" else threshold.toString()) }
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = AppColors.DarkerNavy
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Mempool Size",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = AppColors.Orange
-                )
-                Switch(
-                    checked = enabled,
-                    onCheckedChange = onEnabledChange,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = AppColors.Orange,
-                        uncheckedThumbColor = Color.Gray,
-                        uncheckedTrackColor = AppColors.DarkerNavy
-                    )
-                )
-            }
-            Text(
-                text = "Get notified when mempool size ${if (aboveThreshold) "rises above" else "falls below"} threshold.",
-                style = MaterialTheme.typography.titleMedium,
-                color = AppColors.DataGray
-            )
-            if (enabled) {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    ThresholdToggle(
-                        isAboveThreshold = aboveThreshold,
-                        onToggleChange = onAboveThresholdChange
-                    )
-
-                    OutlinedTextField(
-                        value = debouncedThreshold,
-                        onValueChange = { newValue ->
-                            // Allow empty, digits, and a single decimal point
-                            if (newValue.isEmpty() || newValue.matches(Regex("^\\d*\\.?\\d*$"))) {
-                                debouncedThreshold = newValue
-                                if (newValue.isEmpty()) {
-                                    onThresholdChange(0f)
-                                } else {
-                                    newValue.toFloatOrNull()?.let { value ->
-                                        onThresholdChange(value)
-                                    }
-                                }
-                            }
-                        },
-                        label = { Text("Threshold (vMB)", color = AppColors.DataGray) },
-                        modifier = Modifier.fillMaxWidth(),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = AppColors.DataGray,
-                            focusedBorderColor = AppColors.Orange,
-                            unfocusedTextColor = AppColors.DataGray,
-                            focusedTextColor = AppColors.Orange
-                        )
-                    )
-
-                    NumericTextField(
-                        value = if (frequency == 0) "" else frequency.toString(),
-                        onValueChange = {
-                            onFrequencyChange(if (it.isEmpty()) 0 else it.toIntOrNull() ?: 0)
-                        },
-                        label = "Check Interval (minutes)"
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun FeeRatesNotificationSection(
-    enabled: Boolean,
-    frequency: Int,
-    selectedFeeRateType: FeeRateType,
-    threshold: Int,
-    isAboveThreshold: Boolean,
-    onEnabledChange: (Boolean) -> Unit,
-    onFrequencyChange: (Int) -> Unit,
-    onFeeRateTypeChange: (FeeRateType) -> Unit,
-    onThresholdChange: (Int) -> Unit,
-    onAboveThresholdChange: (Boolean) -> Unit
-) {
-    var expanded by remember { mutableStateOf(false) }
-    var debouncedThreshold by remember(threshold) { mutableIntStateOf(threshold) }
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = AppColors.DarkerNavy
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = "Fee Rates",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = AppColors.Orange
-                )
-                Switch(
-                    checked = enabled,
-                    onCheckedChange = onEnabledChange,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = AppColors.Orange,
-                        uncheckedThumbColor = Color.Gray,
-                        uncheckedTrackColor = AppColors.DarkerNavy,
-                        checkedBorderColor = AppColors.Orange,
-                        uncheckedBorderColor = Color.Gray
-                    )
-                )
-            }
-            Text(
-                text = "Get notified when fee rates ${if (isAboveThreshold) "rise above" else "fall below"} threshold.",
-                style = MaterialTheme.typography.titleMedium,
-                color = AppColors.DataGray
-            )
-            if (enabled) {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    ThresholdToggle(
-                        isAboveThreshold = isAboveThreshold,
-                        onToggleChange = onAboveThresholdChange
-                    )
-
-                    NumericTextField(
-                        value = if (debouncedThreshold == 0) "" else debouncedThreshold.toString(),
-                        onValueChange = { newValue ->
-                            if (newValue.isEmpty()) {
-                                debouncedThreshold = 0
-                                onThresholdChange(0)
-                            } else {
-                                newValue.toIntOrNull()?.let { value ->
-                                    debouncedThreshold = value
-                                    onThresholdChange(value)
-                                }
-                            }
-                        },
-                        label = "Threshold (sat/vB)"
-                    )
-
-                    ExposedDropdownMenuBox(
-                        expanded = expanded,
-                        onExpandedChange = { expanded = !expanded }
-                    ) {
-                        OutlinedTextField(
-                            value = when (selectedFeeRateType) {
-                                FeeRateType.NEXT_BLOCK -> "Next Block"
-                                FeeRateType.THREE_BLOCKS -> "3 Blocks"
-                                FeeRateType.SIX_BLOCKS -> "6 Blocks"
-                                FeeRateType.DAY_BLOCKS -> "1 Day"
-                            },
-                            label = { Text("Fee Rate", color = AppColors.DataGray) },
-                            onValueChange = {},
-                            readOnly = true,
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .menuAnchor(),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                unfocusedBorderColor = AppColors.DataGray,
-                                focusedBorderColor = AppColors.Orange,
-                                unfocusedTextColor = AppColors.DataGray,
-                                focusedTextColor = AppColors.Orange
-                            )
-                        )
-                        ExposedDropdownMenu(
-                            expanded = expanded,
-                            onDismissRequest = { expanded = false }
-                        ) {
-                            DropdownMenuItem(
-                                text = { Text("Next Block") },
-                                onClick = {
-                                    onFeeRateTypeChange(FeeRateType.NEXT_BLOCK)
-                                    expanded = false
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("3 Blocks") },
-                                onClick = {
-                                    onFeeRateTypeChange(FeeRateType.THREE_BLOCKS)
-                                    expanded = false
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("6 Blocks") },
-                                onClick = {
-                                    onFeeRateTypeChange(FeeRateType.SIX_BLOCKS)
-                                    expanded = false
-                                }
-                            )
-                            DropdownMenuItem(
-                                text = { Text("1 Day") },
-                                onClick = {
-                                    onFeeRateTypeChange(FeeRateType.DAY_BLOCKS)
-                                    expanded = false
-                                }
-                            )
-                        }
-                    }
-
-                    NumericTextField(
-                        value = if (frequency == 0) "" else frequency.toString(),
-                        onValueChange = {
-                            onFrequencyChange(if (it.isEmpty()) 0 else it.toIntOrNull() ?: 0)
-                        },
-                        label = "Check Interval (minutes)"
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun TransactionConfirmationSection(
-    enabled: Boolean,
-    frequency: Int,
-    transactionId: String,
-    onEnabledChange: (Boolean) -> Unit,
-    onFrequencyChange: (Int) -> Unit,
-    onTransactionIdChange: (String) -> Unit
-) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = AppColors.DarkerNavy
-        )
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Confirmation",
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = AppColors.Orange
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    TooltipButton(
-                        tooltip = "CAUTION: This feature has privacy implications.\nIf you're concerned about privacy, be sure to use the " +
-                                """"Enable Tor" option in settings or connect to your own custom mempool server.""",
-                    )
-                }
-                Switch(
-                    checked = enabled,
-                    onCheckedChange = onEnabledChange,
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = AppColors.Orange,
-                        uncheckedThumbColor = Color.Gray,
-                        uncheckedTrackColor = AppColors.DarkerNavy,
-                        checkedBorderColor = AppColors.Orange,
-                        uncheckedBorderColor = Color.Gray
-                    )
-                )
-            }
-            Text(
-                text = "Get notified when a transaction is confirmed.",
-                style = MaterialTheme.typography.titleMedium,
-                color = AppColors.DataGray
-            )
-            if (enabled) {
-                Column(
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    OutlinedTextField(
-                        value = transactionId,
-                        onValueChange = { newValue ->
-                            if (newValue.isEmpty() || newValue.all { it.isLetterOrDigit() }) {
-                                onTransactionIdChange(newValue)
-                            }
-                        },
-                        label = { Text("Transaction ID", color = AppColors.DataGray) },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        colors = OutlinedTextFieldDefaults.colors(
-                            unfocusedBorderColor = AppColors.DataGray,
-                            focusedBorderColor = AppColors.Orange,
-                            unfocusedTextColor = AppColors.DataGray,
-                            focusedTextColor = AppColors.Orange
-                        )
-                    )
-                    NumericTextField(
-                        value = if (frequency == 0) "" else frequency.toString(),
-                        onValueChange = {
-                            onFrequencyChange(if (it.isEmpty()) 0 else it.toIntOrNull() ?: 0)
-                        },
-                        label = "Check Interval (minutes)"
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun SettingsScreen(modifier: Modifier = Modifier) {
-    val context = LocalContext.current
-    val settingsRepository = remember { SettingsRepository.getInstance(context) }
-    val torManager = remember { TorManager.getInstance() }
-    val torStatus by torManager.torStatus.collectAsState()
-    var torEnabled by remember { mutableStateOf(torManager.isTorEnabled()) }
-    var updateFrequency by remember { mutableLongStateOf(settingsRepository.getUpdateFrequency()) }
-
-    // Track initial values
-    val initialTorEnabled = rememberSaveable { torManager.isTorEnabled() }
-    val initialApiUrl = rememberSaveable { settingsRepository.getApiUrl() }
-
-    var selectedOption by remember {
-        mutableIntStateOf(
-            if (settingsRepository.getApiUrl() == "https://mempool.space") 0 else 1
-        )
-    }
-    val initialSelectedOption = rememberSaveable {
-        if (settingsRepository.getApiUrl() == "https://mempool.space") 0 else 1
-    }
-
-    var customUrl by remember {
-        mutableStateOf(
-            if (settingsRepository.getApiUrl() != "https://mempool.space")
-                settingsRepository.getApiUrl() else ""
-        )
-    }
-    var showRestartDialog by remember { mutableStateOf(false) }
-    var showUrlError by remember { mutableStateOf(false) }
-    var testResult by remember { mutableStateOf<Boolean?>(null) }
-    var isTestingConnection by remember { mutableStateOf(false) }
-    val savedServers = remember { mutableStateOf(settingsRepository.getSavedServers().toList()) }
-
-    // New state for visible cards
-    var visibleCards by remember { mutableStateOf(settingsRepository.getVisibleCards()) }
-
-    // Check if settings have changed
-    val hasServerSettingsChanged = selectedOption != initialSelectedOption ||
-            (selectedOption == 1 && customUrl != initialApiUrl) ||
-            torEnabled != initialTorEnabled ||
-            visibleCards != settingsRepository.getVisibleCards()
-
-    // URL validation function
-    fun isValidUrl(url: String): Boolean {
-        return url.startsWith("http://") || url.startsWith("https://")
-    }
-
-    // Update the Button onClick handler
-    fun handleSave() {
-        val newUrl = if (selectedOption == 0) {
-            // When saving with default option, ensure Tor is disabled
-            if (torManager.isTorEnabled()) {
-                torManager.stopTor(context)
-                torEnabled = false
-            }
-            "https://mempool.space"
-        } else {
-            customUrl.trim().trimEnd('/')
-        }
-
-        if (selectedOption == 1) {
-            if (!isValidUrl(newUrl)) {
-                showUrlError = true
-                return
-            }
-            // Disable Tor if saving a non-onion address
-            if (!newUrl.contains(".onion") && torManager.isTorEnabled()) {
-                torManager.stopTor(context)
-                torEnabled = false
-            }
-        }
-
-        showUrlError = false
-        settingsRepository.saveApiUrl(newUrl)
-        // Save Tor state when user clicks Save
-        torManager.saveTorState(torEnabled)
-        // Save visible cards
-        settingsRepository.saveVisibleCards(visibleCards)
-        showRestartDialog = true
-    }
-
-    // Add this function to handle server testing
-    suspend fun testServerConnection(url: String): Boolean {
-        return try {
-            if (url.contains(".onion")) {
-                // Check Tor status first
-                if (torManager.torStatus.value != TorStatus.CONNECTED) {
-                    return false
-                }
-                val client = NetworkClient.createTestClient(url, useTor = true)
-                val response = client.getBlockHeight()
-                response.isSuccessful
-            } else {
-                val client = NetworkClient.createTestClient(url, useTor = false)
-                val response = client.getBlockHeight()
-                response.isSuccessful
-            }
-        } catch (_: Exception) {
-            false
-        }
-    }
-
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(horizontal = 12.dp)
-            .padding(bottom = 4.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)  // Changed from 12.dp to 6.dp
-    ) {
-        // Mempool Server Card
-        Card(
-            colors = CardDefaults.cardColors(
-                containerColor = AppColors.DarkerNavy
-            )
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-            ) {
-                Text(
-                    text = "Mempool Server",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = AppColors.Orange
-                )
-
-                // Server selection options
-                Column {
-                    RadioOption(
-                        text = "Default (mempool.space)",
-                        selected = selectedOption == 0,
-                        onClick = {
-                            selectedOption = 0
-                            if (torManager.isTorEnabled()) {
-                                torManager.stopTor(context)
-                                torEnabled = false
-                            }
-                        },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-
-                    RadioOption(
-                        text = "Custom Server",
-                        selected = selectedOption == 1,
-                        onClick = { selectedOption = 1 }
-                    )
-
-                    if (selectedOption == 1) {
-                        var isDropdownExpanded by remember { mutableStateOf(false) }
-
-                        // Function to check if URL is mempool.space
-                        fun isDefaultServer(url: String): Boolean {
-                            val trimmed = url.trim()
-                            return trimmed == "mempool.space" ||
-                                    trimmed == "mempool.space/" ||
-                                    trimmed == "https://mempool.space" ||
-                                    trimmed == "https://mempool.space/"
-                        }
-
-                        ExposedDropdownMenuBox(
-                            expanded = isDropdownExpanded,
-                            onExpandedChange = { newValue ->
-                                // Only allow auto-collapse, not auto-expand
-                                if (!newValue) isDropdownExpanded = false
-                            },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 10.dp)
-                        ) {
-                            OutlinedTextField(
-                                value = customUrl,
-                                onValueChange = { url ->
-                                    customUrl = url
-                                    showUrlError = isDefaultServer(url)
-                                    testResult = null
-                                    if (url.contains(".onion")) {
-                                        if (!torEnabled) {
-                                            torEnabled = true
-                                            torManager.startTor(context)
-                                        }
-                                    }
-                                },
-                                label = { Text(if (torEnabled) "Onion Address" else "Server Address", color = AppColors.DataGray) },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .menuAnchor(),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = AppColors.Orange,
-                                    unfocusedBorderColor = AppColors.DataGray,
-                                    unfocusedTextColor = AppColors.DataGray,
-                                    focusedTextColor = AppColors.Orange
-                                ),
-                                isError = showUrlError,
-                                supportingText = if (showUrlError) {
-                                    { Text(
-                                        text = if (isDefaultServer(customUrl))
-                                            "Use default server option instead"
-                                        else "URL must start with http:// or https://",
-                                        color = MaterialTheme.colorScheme.error
-                                    ) }
-                                } else null,
-                                trailingIcon = {
-                                    IconButton(onClick = { isDropdownExpanded = !isDropdownExpanded }) {
-                                        ExposedDropdownMenuDefaults.TrailingIcon(expanded = isDropdownExpanded)
-                                    }
-                                }
-                            )
-
-                            ExposedDropdownMenu(
-                                expanded = isDropdownExpanded,
-                                onDismissRequest = { isDropdownExpanded = false },
-                                modifier = Modifier
-                                    .exposedDropdownSize()
-                                    .heightIn(max = 250.dp)
-                                    .verticalScroll(rememberScrollState())
-                            ) {
-                                savedServers.value.forEach { serverUrl ->
-                                    DropdownMenuItem(
-                                        text = {
-                                            Row(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                horizontalArrangement = Arrangement.SpaceBetween,
-                                                verticalAlignment = Alignment.CenterVertically
-                                            ) {
-                                                Text(
-                                                    text = if (serverUrl.length > 26)
-                                                        serverUrl.take(26) + "..."
-                                                    else serverUrl,
-                                                    style = MaterialTheme.typography.bodyLarge,
-                                                    color = AppColors.DataGray,
-                                                    modifier = Modifier.weight(1f)
-                                                )
-                                                IconButton(
-                                                    onClick = {
-                                                        settingsRepository.removeSavedServer(serverUrl)
-                                                        savedServers.value = settingsRepository.getSavedServers().toList()
-                                                    },
-                                                    modifier = Modifier.padding(start = 8.dp)
-                                                ) {
-                                                    Icon(
-                                                        imageVector = Icons.Default.Delete,
-                                                        contentDescription = "Delete server",
-                                                        tint = Color(0xFFA00000)  // Brighter Dark Red
-                                                    )
-                                                }
-                                            }
-                                        },
-                                        onClick = {
-                                            customUrl = serverUrl.trimEnd('/')
-                                            if (serverUrl.contains(".onion")) {
-                                                torEnabled = true
-                                                torManager.startTor(context)
-                                            }
-                                            isDropdownExpanded = false
-                                        },
-                                        contentPadding = PaddingValues(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
-                                        colors = MenuDefaults.itemColors(
-                                            textColor = AppColors.DataGray
-                                        )
-                                    )
-                                }
-
-                                if (savedServers.value.isEmpty()) {
-                                    DropdownMenuItem(
-                                        text = {
-                                            Text(
-                                                text = "No saved servers",
-                                                style = MaterialTheme.typography.bodyLarge,
-                                                color = AppColors.DataGray.copy(alpha = 0.7f)
-                                            )
-                                        },
-                                        onClick = { isDropdownExpanded = false },
-                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-                                        colors = MenuDefaults.itemColors(
-                                            textColor = AppColors.DataGray
-                                        )
-                                    )
-                                }
-                            }
-                        }
-                        // Connection status indicator
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(top = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(14.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .background(
-                                        color = when {
-                                            selectedOption == 0 -> Color.Green
-                                            isTestingConnection -> Color.Yellow
-                                            testResult == true -> Color.Green
-                                            testResult == false -> Color.Red
-                                            else -> Color.Gray
-                                        },
-                                        shape = CircleShape
-                                    )
-                            )
-                            Text(
-                                text = when {
-                                    selectedOption == 0 -> "Connected to mempool.space"
-                                    isTestingConnection -> "Testing connection..."
-                                    testResult == true -> "Connected successfully"
-                                    testResult == false -> "Connection failed"
-                                    else -> "Connection status"
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                color = AppColors.DataGray
-                            )
-                        }
-
-                        LaunchedEffect(customUrl, selectedOption, torEnabled, torStatus) {
-                            if (selectedOption == 1 && customUrl.isNotEmpty() &&
-                                (customUrl.startsWith("http://") || customUrl.startsWith("https://"))) {
-                                isTestingConnection = true
-                                // Wait for changes before testing - longer delay for .onion addresses
-                                delay(if (customUrl.contains(".onion")) 2000L else 500L)
-                                // If Tor is enabled, wait until it's connected
-                                if (torEnabled && torStatus != TorStatus.CONNECTED) {
-                                    testResult = null
-                                    isTestingConnection = false
-                                    return@LaunchedEffect
-                                }
-                                // First attempt
-                                testResult = testServerConnection(customUrl)
-                                // If first attempt fails, wait and try again - longer delay for .onion
-                                if (testResult == false) {
-                                    delay(if (customUrl.contains(".onion")) 2000L else 500L)
-                                    testResult = testServerConnection(customUrl)
-                                }
-                                isTestingConnection = false
-                            }
-                        }
-                    }
-                }
-
-                // Tor settings section
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Text(
-                            text = "Enable Tor",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = AppColors.DataGray
-                        )
-                        if (torEnabled) {
-                            Text(
-                                text = "Status: ${torStatus.name}",
-                                color = when (torStatus) {
-                                    TorStatus.CONNECTED -> Color.Green
-                                    TorStatus.CONNECTING -> Color.Yellow
-                                    TorStatus.DISCONNECTED -> Color.Red
-                                    TorStatus.ERROR -> Color.Red
-                                },
-                                style = MaterialTheme.typography.bodySmall,
-                                modifier = Modifier.padding(top = 4.dp)
-                            )
-                            Text(
-                                text = "Tor defaults to mempool.space's onion address.",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = AppColors.DataGray.copy(alpha = 0.7f),
-                                modifier = Modifier.padding(top = 2.dp)
-                            )
-                        }
-                    }
-                    Switch(
-                        checked = torEnabled,
-                        onCheckedChange = { enabled ->
-                            if (enabled && customUrl.isNotEmpty() && (!customUrl.startsWith("http://") && !customUrl.startsWith("https://"))) {
-                                showUrlError = true
-                                return@Switch
-                            }
-                            torEnabled = enabled
-                            if (enabled) {
-                                selectedOption = 1
-                                torManager.startTor(context)
-                                if (customUrl.isEmpty() || !customUrl.contains(".onion")) {
-                                    customUrl = "http://mempoolhqx4isw62xs7abwphsq7ldayuidyx2v2oethdhhj6mlo2r6ad.onion"
-                                }
-                            } else {
-                                torManager.stopTor(context)
-                            }
-                        },
-                        enabled = torStatus != TorStatus.CONNECTING,
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = Color.White,
-                            checkedTrackColor = AppColors.DarkerNavy,
-                            uncheckedThumbColor = Color.White,
-                            uncheckedTrackColor = AppColors.DarkerNavy,
-                            checkedBorderColor = Color.Gray,
-                            uncheckedBorderColor = Color.Gray
-                        )
-                    )
-                }
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Button(
-                        onClick = {
-                            if (selectedOption == 1 && (customUrl.isEmpty() || (!customUrl.startsWith("http://") && !customUrl.startsWith("https://")))) {
-                                showUrlError = true
-                                return@Button
-                            }
-                            if (selectedOption == 1) {
-                                settingsRepository.saveApiUrl(customUrl)
-                                settingsRepository.addSavedServer(customUrl)
-                                savedServers.value = settingsRepository.getSavedServers().toList()
-                            }
-                            handleSave()
-                        },
-                        enabled = hasServerSettingsChanged &&
-                                !(torEnabled && torStatus != TorStatus.CONNECTED), // Disable if Tor is enabled but not connected
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = AppColors.Orange,
-                            disabledContainerColor = AppColors.Orange.copy(alpha = 0.5f)
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = if (torEnabled && torStatus != TorStatus.CONNECTED)
-                                "Waiting for Tor..."
-                            else
-                                "Save"
-                        )
-                    }
-                }
-            }
-        }
-
-        // Notifications Settings Card
-        Card(
-            colors = CardDefaults.cardColors(
-                containerColor = AppColors.DarkerNavy
-            )
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Notifications",
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = AppColors.Orange
-                    )
-                }
-
-                var expanded by remember { mutableStateOf(false) }
-                val isUsingCustomServer = settingsRepository.getApiUrl() != "https://mempool.space" &&
-                        settingsRepository.getApiUrl() != "http://mempoolhqx4isw62xs7abwphsq7ldayuidyx2v2oethdhhj6mlo2r6ad.onion"
-                val serverRestartComplete = !settingsRepository.needsRestartForServer()
-                val timeUnitEnabled = isUsingCustomServer && serverRestartComplete
-
-                // Force minutes when using default server or before restart
-                val selectedTimeUnit = remember {
-                    if (!timeUnitEnabled) {
-                        settingsRepository.saveNotificationTimeUnit("minutes")
-                        mutableStateOf("minutes")
-                    } else {
-                        mutableStateOf(settingsRepository.getNotificationTimeUnit())
-                    }
-                }
-
-                // Update time unit if server changes or restart status changes
-                LaunchedEffect(timeUnitEnabled) {
-                    if (!timeUnitEnabled) {
-                        selectedTimeUnit.value = "minutes"
-                        settingsRepository.saveNotificationTimeUnit("minutes")
-                    }
-                }
-
-                ExposedDropdownMenuBox(
-                    expanded = expanded,
-                    onExpandedChange = { if (timeUnitEnabled) expanded = !expanded }
-                ) {
-                    OutlinedTextField(
-                        value = when (selectedTimeUnit.value) {
-                            "seconds" -> "Seconds"
-                            else -> "Minutes"
-                        },
-                        onValueChange = {},
-                        readOnly = true,
-                        enabled = timeUnitEnabled,
-                        label = { Text("Notification Interval") },
-                        trailingIcon = {
-                            if (timeUnitEnabled) {
-                                ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
-                            }
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .menuAnchor()
-                            .padding(top = 16.dp),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = AppColors.Orange,
-                            unfocusedBorderColor = AppColors.DataGray,
-                            focusedLabelColor = AppColors.Orange,
-                            disabledTextColor = AppColors.DataGray.copy(alpha = 0.7f),
-                            disabledBorderColor = AppColors.DataGray.copy(alpha = 0.5f),
-                            disabledLabelColor = AppColors.DataGray.copy(alpha = 0.7f)
-                        )
-                    )
-
-                    if (timeUnitEnabled) {
-                        ExposedDropdownMenu(
-                            expanded = expanded,
-                            onDismissRequest = { expanded = false }
-                        ) {
-                            listOf("minutes", "seconds").forEach { unit ->
-                                DropdownMenuItem(
-                                    text = {
-                                        Text(
-                                            when (unit) {
-                                                "minutes" -> "Minutes"
-                                                else -> "Seconds"
-                                            }
-                                        )
-                                    },
-                                    onClick = {
-                                        selectedTimeUnit.value = unit
-                                        settingsRepository.saveNotificationTimeUnit(unit)
-                                        expanded = false
-                                    },
-                                    contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
-                                )
-                            }
-                        }
-                    }
-                }
-
-                Text(
-                    text = if (!isUsingCustomServer) {
-                        "To prevent excessive data requests to mempool.space, this option is only available when using a custom server."
-                    } else if (!serverRestartComplete) {
-                        "Save a custom server to enable this option."
-                    } else {
-                        when (selectedTimeUnit.value) {
-                            "seconds" -> "Notification interval will be set to seconds."
-                            else -> "Notification interval will be set to minutes."
-                        }
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AppColors.DataGray,
-                    modifier = Modifier.padding(top = 4.dp, start = 12.dp)
-                )
-            }
-        }
-
-        // Widget Settings Card
-        Card(
-            colors = CardDefaults.cardColors(
-                containerColor = AppColors.DarkerNavy
-            )
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-            ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "Widgets",
-                        style = MaterialTheme.typography.headlineMedium,
-                        color = AppColors.Orange
-                    )
-                    Spacer(modifier = Modifier.width(4.dp))
-                    TooltipButton(
-                        tooltip = {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    text = """If widgets don't update properly, enable "unrestricted" app battery usage.""",
-                                    modifier = Modifier.weight(1f).padding(end = 8.dp),
-                                    style = MaterialTheme.typography.bodyLarge,
-                                    color = Color.White
-                                )
-                                Icon(
-                                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
-                                    contentDescription = "Open battery settings",
-                                    tint = Color.White,
-                                    modifier = Modifier
-                                        .size(20.dp)
-                                        .clickable {
-                                            val intent = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                                                data = Uri.fromParts("package", context.packageName, null)
-                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                            }
-                                            context.startActivity(intent)
-                                        }
-                                )
-                            }
-                        }
-                    )
-                }
-
-                var expanded by remember { mutableStateOf(false) }
-                var showCustomHoursDialog by remember { mutableStateOf(false) }
-                var customHoursText by remember { mutableStateOf("") }
-                
-                ExposedDropdownMenuBox(
-                    expanded = expanded,
-                    onExpandedChange = { expanded = !expanded }
-                ) {
-                    OutlinedTextField(
-                        value = when (updateFrequency) {
-                            15L -> "15 minutes"
-                            30L -> "30 minutes"
-                            60L -> "1 hour"
-                            else -> if (updateFrequency > 60L) "${updateFrequency / 60L} hours" else "$updateFrequency minutes"
-                        },
-                        onValueChange = {},
-                        readOnly = true,
-                        label = { Text("Update frequency") },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
-                        modifier = Modifier
-                            .menuAnchor()
-                            .fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = AppColors.Orange,
-                            focusedLabelColor = AppColors.Orange
-                        )
-                    )
-
-                    ExposedDropdownMenu(
-                        expanded = expanded,
-                        onDismissRequest = { expanded = false }
-                    ) {
-                        listOf(15L, 30L, 60L, "custom").forEach { option ->
-                            DropdownMenuItem(
-                                text = {
-                                    Text(when (option) {
-                                        15L -> "15 minutes"
-                                        30L -> "30 minutes"
-                                        60L -> "1 hour"
-                                        else -> "Custom..."
-                                    })
-                                },
-                                onClick = {
-                                    if (option == "custom") {
-                                        expanded = false
-                                        showCustomHoursDialog = true
-                                    } else {
-                                        updateFrequency = option as Long
-                                        settingsRepository.saveUpdateFrequency(option)
-                                        WidgetUpdater.scheduleUpdates(context)
-                                        expanded = false
-                                    }
-                                },
-                                contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
-                            )
-                        }
-                    }
-                }
-
-                if (showCustomHoursDialog) {
-                    AlertDialog(
-                        onDismissRequest = { showCustomHoursDialog = false },
-                        title = { Text("Set Custom Update Frequency") },
-                        text = {
-                            Column {
-                                Text(
-                                    "Enter update frequency in hours (1-24)",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    modifier = Modifier.padding(bottom = 8.dp)
-                                )
-                                OutlinedTextField(
-                                    value = customHoursText,
-                                    onValueChange = { value ->
-                                        // Only allow digits and limit length
-                                        if (value.all { it.isDigit() } && value.length <= 2) {
-                                            customHoursText = value
-                                        }
-                                    },
-                                    label = { Text("Hours") },
-                                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth()
-                                )
-                            }
-                        },
-                        confirmButton = {
-                            Button(
-                                onClick = {
-                                    val hours = customHoursText.toIntOrNull()
-                                    if (hours != null && hours in 1..24) {
-                                        val minutes = hours * 60L
-                                        updateFrequency = minutes
-                                        settingsRepository.saveUpdateFrequency(minutes)
-                                        WidgetUpdater.scheduleUpdates(context)
-                                        showCustomHoursDialog = false
-                                        customHoursText = ""
-                                    }
-                                }
-                            ) {
-                                Text("Save")
-                            }
-                        },
-                        dismissButton = {
-                            TextButton(
-                                onClick = {
-                                    showCustomHoursDialog = false
-                                    customHoursText = ""
-                                }
-                            ) {
-                                Text("Cancel")
-                            }
-                        }
-                    )
-                }
-
-                Text(
-                    text = when {
-                        updateFrequency >= 60L && updateFrequency % 60L == 0L -> {
-                            val hours = updateFrequency / 60L
-                            "Widgets will auto-update every ${if (hours == 1L) "1 hour" else "$hours hours"}."
-                        }
-                        else -> "Widgets will auto-update every $updateFrequency minutes."
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = AppColors.DataGray,
-                    modifier = Modifier.padding(top = 4.dp, start = 12.dp)
-                )
-            }
-        }
-
-        // Dashboard Cards section - Moved to bottom
-        Card(
-            colors = CardDefaults.cardColors(
-                containerColor = AppColors.DarkerNavy
-            )
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-            ) {
-                Text(
-                    text = "Dashboard",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = AppColors.Orange
-                )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // List of available cards
-                val availableCards = listOf("Block Height", "Hashrate", "Mempool Size", "Fee Rates", "Fee Distribution")
-
-                availableCards.forEach { cardName ->
-                    Card(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(vertical = 4.dp)
-                            .clickable {
-                                visibleCards = if (cardName in visibleCards) {
-                                    visibleCards - cardName
-                                } else {
-                                    visibleCards + cardName
-                                }
-                                // Save immediately when toggling cards
-                                settingsRepository.saveVisibleCards(visibleCards)
-                            },
-                        colors = CardDefaults.cardColors(
-                            containerColor = AppColors.DataGray.copy(alpha = 0.05f)
-                        )
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = cardName,
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = if (cardName in visibleCards)
-                                    AppColors.DataGray
-                                else
-                                    AppColors.DataGray.copy(alpha = 0.5f)
-                            )
-                            Checkbox(
-                                checked = cardName in visibleCards,
-                                onCheckedChange = null, // Handled by card click
-                                colors = CheckboxDefaults.colors(
-                                    checkedColor = AppColors.DataGray,
-                                    uncheckedColor = AppColors.DataGray.copy(alpha = 0.3f),
-                                    checkmarkColor = AppColors.DarkerNavy
-                                )
-                            )
-                        }
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.weight(1f))
-
-        // Footer
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 20.dp)
-                .padding(bottom = 4.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            IconButton(
-                onClick = {
-                    val intent = Intent(Intent.ACTION_VIEW).apply {
-                        data = Uri.parse("https://github.com/aeonBTC/Mempal/")
-                    }
-                    context.startActivity(intent)
-                },
-                modifier = Modifier.size(28.dp)
-            ) {
-                Icon(
-                    painter = painterResource(id = R.drawable.ic_github),
-                    contentDescription = "GitHub Repository",
-                    tint = AppColors.Orange
-                )
-            }
-
-            Text(
-                text = "Mempal v${BuildConfig.VERSION_NAME}",
-                style = MaterialTheme.typography.bodyMedium,
-                color = AppColors.DataGray
-            )
-        }
-    }
-
-    if (showRestartDialog) {
-        AlertDialog(
-            onDismissRequest = { showRestartDialog = false },
-            title = {
-                Text("Restart Required")
-            },
-            text = {
-                Text("Please restart the app to save your custom server settings.")
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = {
-                        showRestartDialog = false
-                        val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-                        intent?.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK)
-                        context.startActivity(intent)
-                        (context as? Activity)?.finishAffinity()
-                        Runtime.getRuntime().exit(0)
-                    }
-                ) {
-                    Text("Restart Now")
-                }
-            }
-        )
-    }
-}
-
-@Composable
-private fun RadioOption(
-    text: String,
-    selected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(40.dp)
-            .selectable(selected = selected, onClick = onClick),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        RadioButton(
-            selected = selected,
-            onClick = null,
-            colors = RadioButtonDefaults.colors(
-                selectedColor = AppColors.Orange
-            ),
-            modifier = Modifier.padding(start = 16.dp)
-        )
-        Text(
-            text = text,
-            style = MaterialTheme.typography.bodyLarge,
-            color = AppColors.DataGray,
-            modifier = Modifier.padding(start = 8.dp)
-        )
-    }
-}
-
-@Composable
-private fun ThresholdToggle(
-    isAboveThreshold: Boolean,
-    onToggleChange: (Boolean) -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = "Notify when:",
-            style = MaterialTheme.typography.titleMedium,
-            color = AppColors.DataGray
-        )
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = "Below",
-                color = if (!isAboveThreshold) AppColors.Orange else AppColors.DataGray
-            )
-            Switch(
-                checked = isAboveThreshold,
-                onCheckedChange = onToggleChange,
-                modifier = Modifier.scale(0.8f),
-                colors = SwitchDefaults.colors(
-                    checkedThumbColor = Color.White,
-                    checkedTrackColor = AppColors.DarkerNavy,
-                    uncheckedThumbColor = Color.White,
-                    uncheckedTrackColor = AppColors.DarkerNavy,
-                    checkedBorderColor = Color.Gray,
-                    uncheckedBorderColor = Color.Gray
-                )
-            )
-            Text(
-                text = "Above",
-                color = if (isAboveThreshold) AppColors.Orange else AppColors.DataGray
-            )
-        }
-    }
-}
-
-@Composable
-private fun NumericTextField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    label: String,
-    modifier: Modifier = Modifier
-) {
-    val context = LocalContext.current
-    val settingsRepository = remember { SettingsRepository.getInstance(context) }
-    var fieldValue by remember(value) { mutableStateOf(value) }
-    val timeUnit = settingsRepository.getNotificationTimeUnit()
-    val isCheckIntervalField = label.startsWith("Check Interval")
-
-    // Only apply time unit conversion for check interval fields
-    val displayValue = if (isCheckIntervalField) {
-        if (fieldValue.isNotEmpty()) {
-            fieldValue
-        } else {
-            ""
-        }
-    } else {
-        fieldValue
-    }
-
-    OutlinedTextField(
-        value = displayValue,
-        onValueChange = { newValue ->
-            if (newValue.isEmpty() || newValue.all { char -> char.isDigit() }) {
-                val numericValue = newValue.toIntOrNull() ?: 0
-                if (newValue.isEmpty() || numericValue >= NotificationSettings.MIN_CHECK_FREQUENCY) {
-                    fieldValue = newValue
-                    onValueChange(newValue)
-                }
-            }
-        },
-        label = {
-            Text(
-                if (isCheckIntervalField) {
-                    "Check Interval (${if (timeUnit == "seconds") "seconds" else "minutes"})"
-                } else {
-                    label
-                },
-                color = AppColors.DataGray
-            )
-        },
-        modifier = modifier.fillMaxWidth(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        singleLine = true,
-        colors = OutlinedTextFieldDefaults.colors(
-            unfocusedBorderColor = AppColors.DataGray,
-            focusedBorderColor = AppColors.Orange,
-            unfocusedTextColor = AppColors.DataGray,
-            focusedTextColor = AppColors.Orange
-        )
-    )
-}
-
-@Composable
-private fun WelcomeDialog(onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = "Welcome to Mempal!",
-                    style = MaterialTheme.typography.headlineSmall,
-                    textAlign = TextAlign.Center
-                )
-                Text(
-                    text = "Here are some quick tips to get you started.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = Color.White,
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
-            }
-        },
-        text = {
-            Column(
-                modifier = Modifier
-                    .verticalScroll(rememberScrollState())
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(24.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                // Dashboard tips
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    Text(
-                        text = "Dashboard:",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = AppColors.Orange,
-                        textAlign = TextAlign.Center
-                    )
-                    Text(
-                        text = "•Tap or swipe down to refresh dashboard.\n•Tap Mempal logo to open block explorer.",
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-
-                // Widget tips
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    Text(
-                        text = "Widgets:",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = AppColors.Orange,
-                        textAlign = TextAlign.Center
-                    )
-                    Text(
-                        text = "•Tap any widget to refresh data.\n•Double tap widget to open Mempal app.",
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                }
-            }
-        },
-        confirmButton = {
-            Button(
-                onClick = onDismiss,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = AppColors.Orange
-                ),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Got it!")
-            }
-        }
-    )
-}
-
-// Add this function near the top of the file, after the imports
-private fun formatHashrate(hashrate: Double): String {
-    val units = arrayOf("H/s", "KH/s", "MH/s", "GH/s", "TH/s", "PH/s", "EH/s", "ZH/s")
-    var value = hashrate
-    var unitIndex = 0
-
-    while (value >= 1000 && unitIndex < units.size - 1) {
-        value /= 1000
-        unitIndex++
-    }
-
-    return String.format(Locale.US, "%.2f %s", value, units[unitIndex])
-}
-
-private fun formatDifficulty(difficulty: Double): String {
-    val units = arrayOf("", "K", "M", "G", "T", "P", "E", "Z")
-    var value = difficulty
-    var unitIndex = 0
-
-    while (value >= 1000 && unitIndex < units.size - 1) {
-        value /= 1000
-        unitIndex++
-    }
-
-    return String.format(Locale.US, "%.2f %s", value, units[unitIndex])
 }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Build
+import androidx.core.content.edit
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -43,6 +44,9 @@ class TorManager private constructor() {
     private val minTimeBetweenFailures = 30000L
     private val maxInitialAttempts = 5
     private var isInInitialConnection = true
+    
+    // Pre-allocated InetSocketAddress to avoid creating new instances on each connection check
+    private val torProxyAddress = java.net.InetSocketAddress("127.0.0.1", 9050)
 
     companion object {
         @Volatile
@@ -106,7 +110,6 @@ class TorManager private constructor() {
             connectionJob?.cancel()
             connectionJob = scope?.launch {
                 var currentDelay = minRetryDelay
-                var initialAttempts = 0
 
                 while (isActive) {
                     delay(if (connectionAttempts == 0) initialConnectionTimeout else currentDelay)
@@ -119,13 +122,12 @@ class TorManager private constructor() {
                         withContext(Dispatchers.IO) {
                             val socket = java.net.Socket()
                             try {
-                                socket.connect(java.net.InetSocketAddress("127.0.0.1", 9050), 5000)
+                                socket.connect(torProxyAddress, 5000)
                                 socket.close()
                                 _torStatus.value = TorStatus.CONNECTED
                                 _proxyReady.value = true
                                 emitConnectionEvent(true)
                                 connectionAttempts = 0
-                                initialAttempts = 0
                                 lastConnectionAttempt = System.currentTimeMillis()
                                 lastFailureMessage = 0L
                                 isInInitialConnection = false
@@ -140,7 +142,6 @@ class TorManager private constructor() {
                         connectionAttempts++
                         
                         if (isInInitialConnection && connectionAttempts <= maxInitialAttempts) {
-                            initialAttempts++
                             _torStatus.value = TorStatus.CONNECTING
                             continue
                         }
@@ -226,7 +227,7 @@ class TorManager private constructor() {
                 val torRunning = withContext(Dispatchers.IO) {
                     try {
                         val socket = java.net.Socket()
-                        socket.connect(java.net.InetSocketAddress("127.0.0.1", 9050), 500)
+                        socket.connect(torProxyAddress, 500)
                         socket.close()
                         true
                     } catch (_: Exception) {
@@ -265,6 +266,8 @@ class TorManager private constructor() {
     }
 
     fun saveTorState(enabled: Boolean) {
-        prefsRef?.get()?.edit()?.putBoolean(KEY_TOR_ENABLED, enabled)?.apply()
+        prefsRef?.get()?.edit {
+            putBoolean(KEY_TOR_ENABLED, enabled)
+        }
     }
 }

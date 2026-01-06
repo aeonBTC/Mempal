@@ -19,6 +19,9 @@ interface MempoolApi {
     @GET("api/v1/fees/recommended")
     suspend fun getFeeRates(): Response<FeeRates>
 
+    @GET("api/v1/fees/precise")
+    suspend fun getPreciseFeeRates(): Response<FeeRates>
+
     @GET("api/mempool")
     suspend fun getMempoolInfo(): Response<MempoolInfo>
 
@@ -61,5 +64,11 @@ data class DifficultyAdjustment(
     val estimatedRetargetDate: Long,
     val remainingBlocks: Int,
     val remainingTime: Long,
-    val previousRetarget: Double
+    val previousRetarget: Double,
+    val timeAvg: Long? = null, // Average block time in milliseconds
+    val adjustedTimeAvg: Long? = null, // Adjusted average block time in milliseconds
+    val timeOffset: Long? = null,
+    val expectedBlocks: Double? = null,
+    val previousTime: Long? = null,
+    val nextRetargetHeight: Int? = null
 )

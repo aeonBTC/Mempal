@@ -1,0 +1,7 @@
+- Fully implemented sub-sat and decicmal fee rates.
+- Added fee estimator tool for estimating fee costs.
+- Added average blocktime information to dashboard.
+- Added mempool transaction count to dashboard.
+- Added option to reorder dashboard categories.
+- Performance optimizations and code improvements.
+- Various bug fixes and stability improvements.

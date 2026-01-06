@@ -1,19 +1,28 @@
 package com.example.mempal.viewmodel
 
+import android.content.Context
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.mempal.api.*
+import com.example.mempal.api.DifficultyAdjustment
+import com.example.mempal.api.FeeRates
+import com.example.mempal.api.FeeRatesHelper
+import com.example.mempal.api.HashrateInfo
+import com.example.mempal.api.MempoolApi
+import com.example.mempal.api.MempoolInfo
+import com.example.mempal.api.NetworkClient
 import com.example.mempal.cache.DashboardCache
+import com.example.mempal.repository.SettingsRepository
 import com.example.mempal.tor.TorManager
 import com.example.mempal.tor.TorStatus
 import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import retrofit2.Response
+import java.lang.ref.WeakReference
 
 sealed class DashboardUiState {
     object Loading : DashboardUiState()
@@ -58,6 +67,23 @@ class MainViewModel : ViewModel() {
     private var dashboardLoaded = false
 
     private var serverNeedsFallback = false
+    private var usePreciseFees = false
+    // Use WeakReference to avoid memory leaks - allows GC to reclaim context if ViewModel outlives Activity
+    private var contextRef: WeakReference<Context>? = null
+    private var lastAutoRefreshTime: Long = 0L
+    private val autoRefreshIntervalMs = 60_000L // 1 minute
+    
+    // Cached fallback API clients to avoid recreating on each refresh
+    private var cachedClearnetFallbackApi: MempoolApi? = null
+    private var cachedOnionFallbackApi: MempoolApi? = null
+
+    fun setContext(context: Context) {
+        contextRef = WeakReference(context.applicationContext)
+    }
+
+    fun setUsePreciseFees(enabled: Boolean) {
+        usePreciseFees = enabled
+    }
 
     init {
         // Check if we have cached data immediately
@@ -89,368 +115,245 @@ class MainViewModel : ViewModel() {
         
         // Monitor network initialization state
         viewModelScope.launch {
-            NetworkClient.isInitialized.collect { initialized ->
-                if (initialized) {
-                    val torManager = TorManager.getInstance()
-                    if (!torManager.isTorEnabled()) {
-                        // If not using Tor, refresh immediately
-                        _uiState.value = DashboardUiState.Loading
-                        refreshDashboardData()
-                        dashboardLoaded = true
-                    } else if (torManager.torStatus.value == TorStatus.CONNECTED && !dashboardLoaded) {
-                        // If Tor is already connected and we haven't loaded data yet, refresh
-                        _uiState.value = DashboardUiState.Loading
-                        refreshDashboardData()
-                        dashboardLoaded = true
+            try {
+                NetworkClient.isInitialized.collect { initialized ->
+                    if (initialized) {
+                        val torManager = TorManager.getInstance()
+                        if (!torManager.isTorEnabled()) {
+                            // If not using Tor, refresh immediately
+                            // Get current precise fees setting from SettingsRepository
+                            val currentPreciseFees = contextRef?.get()?.let { 
+                                SettingsRepository.getInstance(it).settings.value.usePreciseFees 
+                            }
+                            // Only refresh if we have context - MainActivity will handle it otherwise
+                            if (currentPreciseFees != null) {
+                                _uiState.value = DashboardUiState.Loading
+                                setUsePreciseFees(currentPreciseFees)
+                                refreshData(currentPreciseFees, isManualRefresh = false)
+                                dashboardLoaded = true
+                            }
+                        } else if (torManager.torStatus.value == TorStatus.CONNECTED && !dashboardLoaded) {
+                            // If Tor is already connected and we haven't loaded data yet, refresh
+                            // Get current precise fees setting from SettingsRepository
+                            val currentPreciseFees = contextRef?.get()?.let { 
+                                SettingsRepository.getInstance(it).settings.value.usePreciseFees 
+                            }
+                            // Only refresh if we have context - MainActivity will handle it otherwise
+                            if (currentPreciseFees != null) {
+                                _uiState.value = DashboardUiState.Loading
+                                setUsePreciseFees(currentPreciseFees)
+                                refreshData(currentPreciseFees, isManualRefresh = false)
+                                dashboardLoaded = true
+                            }
+                        }
+                        // If Tor is enabled but not connected, wait for Tor status changes
+                    } else {
+                        // Reset dashboard loaded state when network is not initialized
+                        dashboardLoaded = false
                     }
-                    // If Tor is enabled but not connected, wait for Tor status changes
-                } else {
-                    // Reset dashboard loaded state when network is not initialized
-                    dashboardLoaded = false
                 }
+            } catch (e: Exception) {
+                println("Error in network initialization collector: ${e.message}")
+                handleError()
             }
         }
 
         // Monitor Tor status changes
         viewModelScope.launch {
-            TorManager.getInstance().torStatus.collect { status ->
-                when (status) {
-                    TorStatus.CONNECTING -> {
-                        _uiState.value = DashboardUiState.Error(
-                            message = "Connecting to Tor network...",
-                            isReconnecting = true
-                        )
-                    }
-                    TorStatus.ERROR -> {
-                        _uiState.value = DashboardUiState.Error(
-                            message = "Connection failed. Check server settings.",
-                            isReconnecting = false
-                        )
-                    }
-                    TorStatus.CONNECTED -> {
-                        if (NetworkClient.isInitialized.value && !dashboardLoaded) {
-                            _uiState.value = DashboardUiState.Loading
-                            refreshDashboardData()
-                            dashboardLoaded = true
-                        }
-                    }
-                    else -> { /* No action needed for other states */ }
-                }
-            }
-        }
-    }
-
-    // Function to handle tab changes
-    // Function to handle tab changes
-    fun onTabSelected(tab: Int) {
-        when (tab) {
-            0 -> if (!dashboardLoaded && NetworkClient.isInitialized.value) {
-                refreshDashboardData()
-                dashboardLoaded = true
-            }
-        }
-    }
-
-    // Load dashboard data only
-    private fun refreshDashboardData() {
-        if (!NetworkClient.isInitialized.value) {
-            val torManager = TorManager.getInstance()
-            if (torManager.isTorEnabled()) {
-                val message = if (DashboardCache.hasCachedData()) {
-                    "Connecting to Tor network..."
-                } else {
-                    "Connecting to Tor network..."
-                }
-                _uiState.value = DashboardUiState.Error(message = message, isReconnecting = true)
-            }
-            return
-        }
-
-        viewModelScope.launch {
             try {
-                println("Starting parallel API calls...")
-                
-                // Safely get the API instance
-                val api = try {
-                    NetworkClient.mempoolApi
-                } catch (e: IllegalStateException) {
-                    println("NetworkClient not properly initialized: ${e.message}")
-                    _uiState.value = DashboardUiState.Error(
-                        message = "Initializing connection...",
-                        isReconnecting = true
-                    )
-                    return@launch
-                }
-
-                coroutineScope {
-                    // For non-Tor connections, we'll use a more aggressive timeout
-                    val timeoutMillis = if (NetworkClient.isUsingOnion()) 30000L else 5000L
-                    val isUsingTor = NetworkClient.isUsingOnion()
-                    
-                    // For non-Tor connections, prioritize essential data first
-                    if (!isUsingTor) {
-                        // First batch: Essential data
-                        val blockHeightDeferred = async { 
-                            withTimeout(timeoutMillis) {
-                                api.getBlockHeight()
-                            }
-                        }
-                        val feeRatesDeferred = async { 
-                            withTimeout(timeoutMillis) {
-                                api.getFeeRates()
-                            }
-                        }
-
-                        // Process essential data first
-                        var hasAnySuccessfulResponse = false
-                        
-                        try {
-                            val blockHeightResponse = blockHeightDeferred.await()
-                            if (blockHeightResponse.isSuccessful) {
-                                blockHeightResponse.body()?.let { blockHeight ->
-                                    _blockHeight.value = blockHeight
-                                    hasAnySuccessfulResponse = true
-                                }
-                            }
-                        } catch (e: Exception) {
-                            println("Error fetching block height: ${e.message}")
-                        }
-
-                        try {
-                            val feeRatesResponse = feeRatesDeferred.await()
-                            if (feeRatesResponse.isSuccessful) {
-                                feeRatesResponse.body()?.let { feeRates ->
-                                    _feeRates.value = feeRates
-                                    hasAnySuccessfulResponse = true
-                                }
-                            }
-                        } catch (e: Exception) {
-                            println("Error fetching fee rates: ${e.message}")
-                        }
-
-                        // If we have essential data, show it immediately
-                        if (hasAnySuccessfulResponse) {
-                            _uiState.value = DashboardUiState.Success(isCache = false)
-                            hasInitialData = true
-                            
-                            // Save state to cache
-                            DashboardCache.saveState(
-                                blockHeight = _blockHeight.value,
-                                blockTimestamp = _blockTimestamp.value,
-                                mempoolInfo = _mempoolInfo.value,
-                                feeRates = _feeRates.value
+                TorManager.getInstance().torStatus.collect { status ->
+                    when (status) {
+                        TorStatus.CONNECTING -> {
+                            _uiState.value = DashboardUiState.Error(
+                                message = "Connecting to Tor network...",
+                                isReconnecting = true
                             )
                         }
-
-                        // Second batch: Non-essential data
-                        launch {
-                            try {
-                                val mempoolInfoResponse = withTimeout(timeoutMillis) {
-                                    api.getMempoolInfo()
-                                }
-                                if (mempoolInfoResponse.isSuccessful) {
-                                    val mempoolInfo = mempoolInfoResponse.body()
-                                    if (mempoolInfo != null) {
-                                        _mempoolInfo.value = mempoolInfo
-                                        
-                                        // Only attempt fallback if needed
-                                        if (mempoolInfo.needsHistogramFallback() || serverNeedsFallback) {
-                                            serverNeedsFallback = true
-                                            try {
-                                                val torManager = TorManager.getInstance()
-                                                val isUsingTor = torManager.isTorEnabled() && torManager.torStatus.value == TorStatus.CONNECTED
-                                                withTimeout(if (isUsingTor) 30000L else 5000L) {
-                                                    val fallbackUrl = if (isUsingTor) {
-                                                        MempoolApi.ONION_BASE_URL
-                                                    } else {
-                                                        MempoolApi.BASE_URL
-                                                    }
-                                                    val fallbackClient = NetworkClient.createTestClient(
-                                                        baseUrl = fallbackUrl,
-                                                        useTor = isUsingTor
-                                                    )
-                                                    val fallbackResponse = fallbackClient.getMempoolInfo()
-                                                    if (fallbackResponse.isSuccessful && fallbackResponse.body() != null) {
-                                                        val fallbackInfo = fallbackResponse.body()!!
-                                                        if (!fallbackInfo.needsHistogramFallback()) {
-                                                            _mempoolInfo.value = mempoolInfo.copy(
-                                                                feeHistogram = fallbackInfo.feeHistogram,
-                                                                isUsingFallbackHistogram = true
-                                                            )
-                                                            
-                                                            // Save updated state to cache
-                                                            DashboardCache.saveState(
-                                                                blockHeight = _blockHeight.value,
-                                                                blockTimestamp = _blockTimestamp.value,
-                                                                mempoolInfo = _mempoolInfo.value,
-                                                                feeRates = _feeRates.value
-                                                            )
-                                                        }
-                                                    }
-                                                }
-                                            } catch (e: Exception) {
-                                                println("Non-critical error fetching fallback data: ${e.message}")
-                                            }
-                                        }
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                println("Non-critical error fetching mempool info: ${e.message}")
-                            }
-                        }
-
-                        // Third batch: Additional data
-                        if (_blockHeight.value != null) {
-                            launch {
-                                try {
-                                    val blockHashResponse = withTimeout(timeoutMillis) {
-                                        api.getLatestBlockHash()
-                                    }
-                                    if (blockHashResponse.isSuccessful) {
-                                        blockHashResponse.body()?.let { hash ->
-                                            val blockInfoResponse = withTimeout(timeoutMillis) {
-                                                api.getBlockInfo(hash)
-                                            }
-                                            if (blockInfoResponse.isSuccessful) {
-                                                blockInfoResponse.body()?.timestamp?.let { timestamp ->
-                                                    _blockTimestamp.value = timestamp
-                                                    
-                                                    // Save updated state to cache with new timestamp
-                                                    DashboardCache.saveState(
-                                                        blockHeight = _blockHeight.value,
-                                                        blockTimestamp = _blockTimestamp.value,
-                                                        mempoolInfo = _mempoolInfo.value,
-                                                        feeRates = _feeRates.value
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    println("Non-critical error fetching timestamp: ${e.message}")
-                                }
-                            }
-                        }
-                    } else {
-                        // For Tor connections, use longer timeouts but similar approach
-                        val blockHeightDeferred = async { 
-                            withTimeout(timeoutMillis) {
-                                api.getBlockHeight()
-                            }
-                        }
-                        val feeRatesDeferred = async { 
-                            withTimeout(timeoutMillis) {
-                                api.getFeeRates()
-                            }
-                        }
-                        val mempoolInfoDeferred = async {
-                            withTimeout(timeoutMillis) {
-                                api.getMempoolInfo()
-                            }
-                        }
-
-                        // Process all responses
-                        var hasAnySuccessfulResponse = false
-                        
-                        try {
-                            val blockHeightResponse = blockHeightDeferred.await()
-                            if (blockHeightResponse.isSuccessful) {
-                                blockHeightResponse.body()?.let { blockHeight ->
-                                    _blockHeight.value = blockHeight
-                                    hasAnySuccessfulResponse = true
-                                }
-                            }
-                        } catch (e: Exception) {
-                            println("Error fetching block height: ${e.message}")
-                        }
-
-                        try {
-                            val feeRatesResponse = feeRatesDeferred.await()
-                            if (feeRatesResponse.isSuccessful) {
-                                feeRatesResponse.body()?.let { feeRates ->
-                                    _feeRates.value = feeRates
-                                    hasAnySuccessfulResponse = true
-                                }
-                            }
-                        } catch (e: Exception) {
-                            println("Error fetching fee rates: ${e.message}")
-                        }
-
-                        try {
-                            val mempoolInfoResponse = mempoolInfoDeferred.await()
-                            if (mempoolInfoResponse.isSuccessful) {
-                                mempoolInfoResponse.body()?.let { mempoolInfo ->
-                                    _mempoolInfo.value = mempoolInfo
-                                    hasAnySuccessfulResponse = true
-                                }
-                            }
-                        } catch (e: Exception) {
-                            println("Error fetching mempool info: ${e.message}")
-                        }
-
-                        // If we have any data, show it and cache it
-                        if (hasAnySuccessfulResponse) {
-                            _uiState.value = DashboardUiState.Success(isCache = false)
-                            hasInitialData = true
-                            
-                            // Save state to cache
-                            DashboardCache.saveState(
-                                blockHeight = _blockHeight.value,
-                                blockTimestamp = _blockTimestamp.value,
-                                mempoolInfo = _mempoolInfo.value,
-                                feeRates = _feeRates.value
+                        TorStatus.ERROR -> {
+                            _uiState.value = DashboardUiState.Error(
+                                message = "Connection failed. Check server settings.",
+                                isReconnecting = false
                             )
                         }
-
-                        // Get block timestamp if we have height
-                        if (_blockHeight.value != null) {
-                            launch {
-                                try {
-                                    val blockHashResponse = withTimeout(timeoutMillis) {
-                                        api.getLatestBlockHash()
-                                    }
-                                    if (blockHashResponse.isSuccessful) {
-                                        blockHashResponse.body()?.let { hash ->
-                                            val blockInfoResponse = withTimeout(timeoutMillis) {
-                                                api.getBlockInfo(hash)
-                                            }
-                                            if (blockInfoResponse.isSuccessful) {
-                                                blockInfoResponse.body()?.timestamp?.let { timestamp ->
-                                                    _blockTimestamp.value = timestamp
-                                                    
-                                                    // Save updated state to cache with new timestamp
-                                                    DashboardCache.saveState(
-                                                        blockHeight = _blockHeight.value,
-                                                        blockTimestamp = _blockTimestamp.value,
-                                                        mempoolInfo = _mempoolInfo.value,
-                                                        feeRates = _feeRates.value
-                                                    )
-                                                }
-                                            }
-                                        }
-                                    }
-                                } catch (e: Exception) {
-                                    println("Non-critical error fetching timestamp: ${e.message}")
+                        TorStatus.CONNECTED -> {
+                            if (NetworkClient.isInitialized.value && !dashboardLoaded) {
+                                // Get current precise fees setting from SettingsRepository
+                                val currentPreciseFees = contextRef?.get()?.let { 
+                                    SettingsRepository.getInstance(it).settings.value.usePreciseFees 
+                                }
+                                // Only refresh if we have context - MainActivity will handle it otherwise
+                                if (currentPreciseFees != null) {
+                                    _uiState.value = DashboardUiState.Loading
+                                    setUsePreciseFees(currentPreciseFees)
+                                    refreshData(currentPreciseFees, isManualRefresh = false)
+                                    dashboardLoaded = true
                                 }
                             }
                         }
+                        else -> { /* No action needed for other states */ }
                     }
                 }
             } catch (e: Exception) {
-                println("Error refreshing data: ${e.message}")
-                e.printStackTrace()
+                println("Error in Tor status collector: ${e.message}")
                 handleError()
-            } finally {
-                _isMainRefreshing.value = false
             }
+        }
+    }
+
+    // Function to handle tab changes
+    fun onTabSelected(tab: Int) {
+        when (tab) {
+            0 -> {
+                // Only auto-refresh if dashboard not loaded OR if 1 minute has elapsed since last auto-refresh
+                val shouldAutoRefresh = if (!dashboardLoaded) {
+                    true
+                } else {
+                    val timeSinceLastRefresh = System.currentTimeMillis() - lastAutoRefreshTime
+                    timeSinceLastRefresh >= autoRefreshIntervalMs
+                }
+                
+                if (shouldAutoRefresh && NetworkClient.isInitialized.value) {
+                    // Get current precise fees setting if context is available
+                    val currentPreciseFees = contextRef?.get()?.let { 
+                        SettingsRepository.getInstance(it).settings.value.usePreciseFees 
+                    }
+                    // Only refresh if we have context to get the correct setting
+                    if (currentPreciseFees != null) {
+                        setUsePreciseFees(currentPreciseFees)
+                        refreshData(currentPreciseFees, isManualRefresh = false)
+                        dashboardLoaded = true
+                    }
+                }
+            }
+        }
+    }
+    
+    // Check if auto-refresh should happen (1 minute elapsed)
+    fun shouldAutoRefresh(): Boolean {
+        val timeSinceLastRefresh = System.currentTimeMillis() - lastAutoRefreshTime
+        return timeSinceLastRefresh >= autoRefreshIntervalMs
+    }
+
+    // Helper extension to safely process API responses with consolidated error handling
+    private inline fun <T> Response<T>?.processBody(
+        onSuccess: (T) -> Unit,
+        errorTag: String = "API"
+    ): Boolean {
+        if (this == null) return false
+        return try {
+            if (isSuccessful) {
+                body()?.let { 
+                    onSuccess(it)
+                    true
+                } ?: false
+            } else false
+        } catch (e: Exception) {
+            println("Error processing $errorTag response: ${e.message}")
+            try { raw().body?.close() } catch (_: Exception) {}
+            false
+        }
+    }
+
+    // Helper function to fetch histogram fallback data
+    private fun fetchHistogramFallback(mempoolInfo: MempoolInfo) {
+        viewModelScope.launch {
+            try {
+                val torManager = TorManager.getInstance()
+                val isUsingTor = torManager.isTorEnabled() && torManager.torStatus.value == TorStatus.CONNECTED
+                withTimeout(if (isUsingTor) 30000L else 5000L) {
+                    // Use cached fallback client to avoid recreating on each refresh
+                    val fallbackClient = if (isUsingTor) {
+                        cachedOnionFallbackApi ?: NetworkClient.createTestClient(
+                            baseUrl = MempoolApi.ONION_BASE_URL,
+                            useTor = true
+                        ).also { cachedOnionFallbackApi = it }
+                    } else {
+                        cachedClearnetFallbackApi ?: NetworkClient.createTestClient(
+                            baseUrl = MempoolApi.BASE_URL,
+                            useTor = false
+                        ).also { cachedClearnetFallbackApi = it }
+                    }
+                    fallbackClient.getMempoolInfo().processBody(
+                        onSuccess = { fallbackInfo ->
+                            if (!fallbackInfo.needsHistogramFallback()) {
+                                _mempoolInfo.value = mempoolInfo.copy(
+                                    feeHistogram = fallbackInfo.feeHistogram,
+                                    isUsingFallbackHistogram = true
+                                )
+                            }
+                        },
+                        errorTag = "fallback mempool info"
+                    )
+                }
+            } catch (e: Exception) {
+                println("Non-critical error fetching fallback data: ${e.message}")
+            }
+        }
+    }
+
+    // Helper function to get fee rates based on setting with fallback support
+    private suspend fun getFeeRates(usePreciseFees: Boolean): Response<FeeRates>? {
+        val context = contextRef?.get()
+        val settingsRepo = context?.let { SettingsRepository.getInstance(it) }
+        
+        // Use shared helper if we have settings, otherwise fall back to simple call
+        return try {
+            if (settingsRepo != null) {
+                FeeRatesHelper.getFeeRatesWithFallback(
+                    api = NetworkClient.mempoolApi,
+                    usePreciseFees = usePreciseFees,
+                    settingsRepository = settingsRepo
+                ) ?: try {
+                    NetworkClient.mempoolApi.getFeeRates()
+                } catch (e: Exception) {
+                    println("Error in final getFeeRates fallback: ${e.message}")
+                    null
+                }
+            } else {
+                // No context available, just use regular fees
+                if (usePreciseFees) {
+                    try {
+                        NetworkClient.mempoolApi.getPreciseFeeRates()
+                    } catch (_: Exception) {
+                        try {
+                            NetworkClient.mempoolApi.getFeeRates()
+                        } catch (e: Exception) {
+                            println("Error in getFeeRates: ${e.message}")
+                            null
+                        }
+                    }
+                } else {
+                    try {
+                        NetworkClient.mempoolApi.getFeeRates()
+                    } catch (e: Exception) {
+                        println("Error in getFeeRates: ${e.message}")
+                        null
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            println("Error in getFeeRates: ${e.message}")
+            null
         }
     }
 
     // Updated refreshData function with type-safe handling
-    fun refreshData() {
+    fun refreshData(usePreciseFees: Boolean? = null, isManualRefresh: Boolean = false) {
+        // Prevent concurrent auto-refreshes - allow manual refresh to proceed
+        // Check and set flag synchronously before launching coroutine to prevent race conditions
+        if (_isMainRefreshing.value && !isManualRefresh) {
+            return
+        }
+        
+        // Set refreshing flag immediately (before coroutine launch) to block concurrent calls
+        _isMainRefreshing.value = true
+        
+        // Update last auto-refresh time only if this is an auto-refresh
+        if (!isManualRefresh) {
+            lastAutoRefreshTime = System.currentTimeMillis()
+        }
         viewModelScope.launch {
             _uiState.value = DashboardUiState.Loading
-            _isMainRefreshing.value = true
 
             try {
                 // Check if NetworkClient is initialized and Tor is ready if needed
@@ -466,19 +369,48 @@ class MainViewModel : ViewModel() {
                     return@launch
                 }
 
-                // Create separate async calls with explicit types
-                val blockHeightDeferred = async { NetworkClient.mempoolApi.getBlockHeight() }
-                val mempoolInfoDeferred = async { NetworkClient.mempoolApi.getMempoolInfo() }
-                val feeRatesDeferred = async { NetworkClient.mempoolApi.getFeeRates() }
-                val hashrateInfoDeferred = async { NetworkClient.mempoolApi.getHashrateInfo() }
-                val difficultyAdjustmentDeferred = async { NetworkClient.mempoolApi.getDifficultyAdjustment() }
+                // Use provided parameter or fallback to stored value
+                val preciseFees = usePreciseFees ?: this@MainViewModel.usePreciseFees
+
+                // Create separate async calls with explicit types - each wrapped in try-catch
+                val blockHeightDeferred = async { 
+                    try { NetworkClient.mempoolApi.getBlockHeight() } 
+                    catch (e: Exception) { println("Error fetching block height: ${e.message}"); null }
+                }
+                val mempoolInfoDeferred = async { 
+                    try { NetworkClient.mempoolApi.getMempoolInfo() } 
+                    catch (e: Exception) { println("Error fetching mempool info: ${e.message}"); null }
+                }
+                val feeRatesDeferred = async { getFeeRates(preciseFees) }
+                val hashrateInfoDeferred = async { 
+                    try { NetworkClient.mempoolApi.getHashrateInfo() } 
+                    catch (e: Exception) { println("Error fetching hashrate info: ${e.message}"); null }
+                }
+                val difficultyAdjustmentDeferred = async { 
+                    try { NetworkClient.mempoolApi.getDifficultyAdjustment() } 
+                    catch (e: Exception) { println("Error fetching difficulty adjustment: ${e.message}"); null }
+                }
                 
                 // Get block hash and info in parallel
-                val blockHashDeferred = async { NetworkClient.mempoolApi.getLatestBlockHash() }
+                val blockHashDeferred = async { 
+                    try { NetworkClient.mempoolApi.getLatestBlockHash() } 
+                    catch (e: Exception) { println("Error fetching block hash: ${e.message}"); null }
+                }
                 val blockHashResponse = blockHashDeferred.await()
-                val blockInfoDeferred = if (blockHashResponse.isSuccessful) {
+                val blockInfoDeferred = if (blockHashResponse != null && blockHashResponse.isSuccessful) {
+                    try {
                     blockHashResponse.body()?.let { hash ->
-                        async { NetworkClient.mempoolApi.getBlockInfo(hash) }
+                        async { 
+                            try { NetworkClient.mempoolApi.getBlockInfo(hash) }
+                            catch (e: Exception) { println("Error fetching block info: ${e.message}"); null }
+                        }
+                        }
+                    } catch (e: Exception) {
+                        println("Error parsing block hash response: ${e.message}")
+                        try {
+                            blockHashResponse.raw().body?.close()
+                        } catch (_: Exception) {}
+                        null
                     }
                 } else null
 
@@ -490,72 +422,82 @@ class MainViewModel : ViewModel() {
                 val difficultyAdjustmentResponse = difficultyAdjustmentDeferred.await()
                 val blockInfoResponse = blockInfoDeferred?.await()
 
-                if (blockHeightResponse.isSuccessful && 
-                    mempoolInfoResponse.isSuccessful && 
-                    feeRatesResponse.isSuccessful && 
-                    hashrateInfoResponse.isSuccessful &&
-                    difficultyAdjustmentResponse.isSuccessful) {
-                    
-                    // Process responses
-                    blockHeightResponse.body()?.let { height -> _blockHeight.value = height }
-                    
-                    // Process block timestamp
-                    blockInfoResponse?.let { response ->
-                        if (response.isSuccessful) {
-                            response.body()?.timestamp?.let { timestamp ->
-                                _blockTimestamp.value = timestamp
-                            }
+                // Process each response individually using consolidated error handling
+                var hasAnySuccessfulResponse = false
+                
+                // Process block height
+                if (blockHeightResponse.processBody(
+                    onSuccess = { height -> _blockHeight.value = height },
+                    errorTag = "block height"
+                )) hasAnySuccessfulResponse = true
+                
+                // Process block timestamp
+                blockInfoResponse.processBody(
+                    onSuccess = { info -> _blockTimestamp.value = info.timestamp },
+                    errorTag = "block info"
+                )
+
+                // Process fee rates
+                if (feeRatesResponse.processBody(
+                    onSuccess = { rates -> _feeRates.value = rates },
+                    errorTag = "fee rates"
+                )) hasAnySuccessfulResponse = true
+                
+                // Process hashrate info
+                hashrateInfoResponse.processBody(
+                    onSuccess = { info -> _hashrateInfo.value = info },
+                    errorTag = "hashrate info"
+                )
+                
+                // Process difficulty adjustment
+                difficultyAdjustmentResponse.processBody(
+                    onSuccess = { adjustment -> _difficultyAdjustment.value = adjustment },
+                    errorTag = "difficulty adjustment"
+                )
+
+                // Handle mempool info with fallback logic
+                if (mempoolInfoResponse.processBody(
+                    onSuccess = { mempoolInfo ->
+                        // Preserve fallback state if we've used fallback before
+                        val preserveFallbackState = serverNeedsFallback && _mempoolInfo.value?.isUsingFallbackHistogram == true
+                        _mempoolInfo.value = if (preserveFallbackState) {
+                            mempoolInfo.copy(isUsingFallbackHistogram = true)
+                        } else {
+                            mempoolInfo
                         }
-                    }
-
-                    feeRatesResponse.body()?.let { rates -> _feeRates.value = rates }
-                    hashrateInfoResponse.body()?.let { info -> _hashrateInfo.value = info }
-                    difficultyAdjustmentResponse.body()?.let { adjustment -> _difficultyAdjustment.value = adjustment }
-
-                    // Handle mempool info with fallback logic
-                    mempoolInfoResponse.body()?.let { mempoolInfo ->
-                        _mempoolInfo.value = mempoolInfo
                         
-                        // Check if we need fallback data
+                        // Check if we need fallback data (fire and forget - don't block)
                         if (mempoolInfo.needsHistogramFallback() || serverNeedsFallback) {
                             serverNeedsFallback = true
-                            try {
-                                val torManager = TorManager.getInstance()
-                                val isUsingTor = torManager.isTorEnabled() && torManager.torStatus.value == TorStatus.CONNECTED
-                                withTimeout(if (isUsingTor) 30000L else 5000L) {
-                                    val fallbackUrl = if (isUsingTor) {
-                                        MempoolApi.ONION_BASE_URL
-                                    } else {
-                                        MempoolApi.BASE_URL
-                                    }
-                                    val fallbackClient = NetworkClient.createTestClient(
-                                        baseUrl = fallbackUrl,
-                                        useTor = isUsingTor
-                                    )
-                                    val fallbackResponse = fallbackClient.getMempoolInfo()
-                                    if (fallbackResponse.isSuccessful && fallbackResponse.body() != null) {
-                                        val fallbackInfo = fallbackResponse.body()!!
-                                        if (!fallbackInfo.needsHistogramFallback()) {
-                                            _mempoolInfo.value = mempoolInfo.copy(
-                                                feeHistogram = fallbackInfo.feeHistogram,
-                                                isUsingFallbackHistogram = true
-                                            )
-                                        }
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                println("Non-critical error fetching fallback data: ${e.message}")
-                            }
+                            fetchHistogramFallback(mempoolInfo)
                         }
-                    }
+                    },
+                    errorTag = "mempool info"
+                )) hasAnySuccessfulResponse = true
 
+                // If we have any successful response, show success
+                if (hasAnySuccessfulResponse) {
                     _uiState.value = DashboardUiState.Success(isCache = false)
+                    hasInitialData = true
+                    // Cache will be written once at the end of refresh cycle
                 } else {
-                    _uiState.value = DashboardUiState.Error("Failed to fetch data")
+                    // No data was successfully fetched - show error
+                    handleError()
                 }
             } catch (e: Exception) {
-                _uiState.value = DashboardUiState.Error(e.localizedMessage ?: "Unknown error")
+                println("Error in refreshData: ${e.message}")
+                handleError()
             } finally {
+                // Cache once at the end of refresh cycle with all available data
+                if (hasInitialData || _blockHeight.value != null || _feeRates.value != null || 
+                    _mempoolInfo.value != null) {
+                    DashboardCache.saveState(
+                        blockHeight = _blockHeight.value,
+                        blockTimestamp = _blockTimestamp.value,
+                        mempoolInfo = _mempoolInfo.value,
+                        feeRates = _feeRates.value
+                    )
+                }
                 _isMainRefreshing.value = false
             }
         }
@@ -571,18 +513,23 @@ class MainViewModel : ViewModel() {
             _mempoolInfo.value = cachedState.mempoolInfo
             
             // Show appropriate message based on connection state
+            val torManager = TorManager.getInstance()
             val message = when {
                 !NetworkClient.isNetworkAvailable.value -> "Waiting for network connection..."
-                NetworkClient.isUsingOnion() && TorManager.getInstance().torStatus.value == TorStatus.CONNECTING -> 
+                NetworkClient.isUsingOnion() && torManager.torStatus.value == TorStatus.CONNECTING -> 
                     "Connecting to Tor network..."
-                else -> "Connecting to server..."
+                NetworkClient.isUsingOnion() && torManager.torStatus.value != TorStatus.CONNECTED -> 
+                    "Tor not connected. Check server settings."
+                else -> "Reconnecting to server..."
             }
             _uiState.value = DashboardUiState.Error(message = message, isReconnecting = true)
         } else {
+            val torManager = TorManager.getInstance()
             val message = when {
                 !NetworkClient.isNetworkAvailable.value -> "No network connection"
-                NetworkClient.isUsingOnion() && TorManager.getInstance().torStatus.value != TorStatus.CONNECTED -> 
-                    "Tor connection failed"
+                NetworkClient.isUsingOnion() && torManager.torStatus.value != TorStatus.CONNECTED -> 
+                    "Tor connection failed. Check server settings."
+                !NetworkClient.isInitialized.value -> "Initializing connection..."
                 else -> "Connection failed. Check server settings."
             }
             _uiState.value = DashboardUiState.Error(message = message, isReconnecting = false)

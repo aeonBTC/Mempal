@@ -1,8 +1,6 @@
 package com.example.mempal.widget
 
 import android.content.Context
-import android.content.Intent
-import android.content.IntentFilter
 import android.os.BatteryManager
 import android.os.PowerManager
 import android.os.SystemClock
@@ -29,14 +27,9 @@ object WidgetUpdater {
         
         // Adapt threshold based on battery state if context is available
         val threshold = if (context != null) {
-            val batteryIntent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-            val level = batteryIntent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
-            val scale = batteryIntent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
-            val batteryStatus = batteryIntent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-            
-            val batteryPct = if (level >= 0 && scale > 0) level * 100 / scale else -1
-            val isCharging = batteryStatus == BatteryManager.BATTERY_STATUS_CHARGING || 
-                              batteryStatus == BatteryManager.BATTERY_STATUS_FULL
+            val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+            val batteryPct = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+            val isCharging = batteryManager.isCharging
             
             // If charging or high battery, allow more frequent updates
             when {
@@ -155,10 +148,8 @@ object WidgetUpdater {
     
     // Check if updates are likely to be restricted based on battery status
     fun checkUpdateRestrictions(context: Context): Boolean {
-        val batteryIntent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        val batteryStatus = batteryIntent?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
-        val isCharging = batteryStatus == BatteryManager.BATTERY_STATUS_CHARGING || 
-                          batteryStatus == BatteryManager.BATTERY_STATUS_FULL
+        val batteryManager = context.getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+        val isCharging = batteryManager.isCharging
         
         val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
         val isPowerSaveMode = powerManager.isPowerSaveMode

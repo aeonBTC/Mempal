@@ -2,6 +2,7 @@ package com.example.mempal.repository
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.core.content.edit
 import com.example.mempal.model.NotificationSettings
 import com.example.mempal.model.FeeRateType
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,11 +48,13 @@ class SettingsRepository private constructor(context: Context) {
         private const val KEY_SELECTED_FEE_RATE_TYPE = "selected_fee_rate_type"
         private const val KEY_FEE_RATE_THRESHOLD = "fee_rate_threshold"
         private const val KEY_FEE_RATE_ABOVE_THRESHOLD = "fee_rate_above_threshold"
+        private const val KEY_USE_PRECISE_FEES = "use_precise_fees"
         private const val KEY_TX_CONFIRMATION_ENABLED = "tx_confirmation_enabled"
         private const val KEY_TX_CONFIRMATION_FREQUENCY = "tx_confirmation_frequency"
         private const val KEY_TRANSACTION_ID = "transaction_id"
 
         private const val KEY_VISIBLE_CARDS = "visible_cards"
+        private const val KEY_CARD_ORDER = "card_order"
         private val DEFAULT_VISIBLE_CARDS = setOf(
             "Block Height",
             "Hashrate",
@@ -59,7 +62,15 @@ class SettingsRepository private constructor(context: Context) {
             "Fee Rates",
             "Fee Distribution"
         )
+        private val DEFAULT_CARD_ORDER = listOf(
+            "Block Height",
+            "Hashrate",
+            "Mempool Size",
+            "Fee Rates",
+            "Fee Distribution"
+        )
         private const val KEY_IS_FIRST_LAUNCH = "is_first_launch"
+        private const val KEY_FEE_DISTRIBUTION_EXPANDED = "fee_distribution_expanded"
 
         fun getInstance(context: Context): SettingsRepository {
             val currentInstance = instance?.get()
@@ -87,10 +98,10 @@ class SettingsRepository private constructor(context: Context) {
     }
 
     fun saveApiUrl(url: String) {
-        prefs.edit()
-            .putString(KEY_API_URL, url)
-            .putBoolean(KEY_SERVER_NEEDS_RESTART, true)
-            .apply()
+        prefs.edit {
+            putString(KEY_API_URL, url)
+            putBoolean(KEY_SERVER_NEEDS_RESTART, true)
+        }
     }
 
     fun getUpdateFrequency(): Long {
@@ -102,7 +113,9 @@ class SettingsRepository private constructor(context: Context) {
     }
 
     fun saveUpdateFrequency(minutes: Long) {
-        prefs.edit().putLong(KEY_UPDATE_FREQUENCY, minutes).apply()
+        prefs.edit {
+            putLong(KEY_UPDATE_FREQUENCY, minutes)
+        }
     }
 
     fun getNotificationTimeUnit(): String {
@@ -110,30 +123,64 @@ class SettingsRepository private constructor(context: Context) {
     }
 
     fun saveNotificationTimeUnit(timeUnit: String) {
-        prefs.edit().putString(KEY_NOTIFICATION_TIME_UNIT, timeUnit).apply()
+        prefs.edit {
+            putString(KEY_NOTIFICATION_TIME_UNIT, timeUnit)
+        }
     }
 
     private fun loadNotificationSettings(): NotificationSettings {
+        // Read all prefs at once for efficiency instead of multiple individual reads
+        val allPrefs = prefs.all
+        
+        // Helper functions to safely extract values from the snapshot
+        fun getBoolean(key: String, default: Boolean = false): Boolean = 
+            (allPrefs[key] as? Boolean) ?: default
+        
+        fun getInt(key: String, default: Int = 0): Int = 
+            (allPrefs[key] as? Int) ?: default
+        
+        fun getIntOrNull(key: String): Int? = 
+            allPrefs[key] as? Int
+        
+        fun getFloat(key: String, default: Float = 0f): Float = 
+            (allPrefs[key] as? Float) ?: default
+        
+        fun getString(key: String, default: String = ""): String = 
+            (allPrefs[key] as? String) ?: default
+        
+        // Handle feeRateThreshold with migration from Int to Float
+        val feeRateThreshold: Double = when (val value = allPrefs[KEY_FEE_RATE_THRESHOLD]) {
+            is Float -> value.toDouble()
+            is Int -> {
+                // Migrate from Int to Float for future use
+                value.toDouble().also { migratedValue ->
+                    prefs.edit { putFloat(KEY_FEE_RATE_THRESHOLD, migratedValue.toFloat()) }
+                }
+            }
+            else -> 0.0
+        }
+        
         return NotificationSettings(
-            blockNotificationsEnabled = prefs.getBoolean(KEY_BLOCK_NOTIFICATIONS_ENABLED, false),
-            blockCheckFrequency = if (prefs.contains(KEY_BLOCK_CHECK_FREQUENCY)) prefs.getInt(KEY_BLOCK_CHECK_FREQUENCY, 0) else 0,
-            newBlockNotificationEnabled = prefs.getBoolean(KEY_NEW_BLOCK_NOTIFICATIONS_ENABLED, false),
-            newBlockCheckFrequency = if (prefs.contains(KEY_NEW_BLOCK_CHECK_FREQUENCY)) prefs.getInt(KEY_NEW_BLOCK_CHECK_FREQUENCY, 0) else 0,
-            specificBlockNotificationEnabled = prefs.getBoolean(KEY_SPECIFIC_BLOCK_NOTIFICATIONS_ENABLED, false),
-            specificBlockCheckFrequency = if (prefs.contains(KEY_SPECIFIC_BLOCK_CHECK_FREQUENCY)) prefs.getInt(KEY_SPECIFIC_BLOCK_CHECK_FREQUENCY, 0) else 0,
-            targetBlockHeight = if (prefs.contains(KEY_TARGET_BLOCK_HEIGHT)) prefs.getInt(KEY_TARGET_BLOCK_HEIGHT, -1) else null,
-            mempoolSizeNotificationsEnabled = prefs.getBoolean(KEY_MEMPOOL_SIZE_NOTIFICATIONS_ENABLED, false),
-            mempoolCheckFrequency = if (prefs.contains(KEY_MEMPOOL_CHECK_FREQUENCY)) prefs.getInt(KEY_MEMPOOL_CHECK_FREQUENCY, 0) else 0,
-            mempoolSizeThreshold = if (prefs.contains(KEY_MEMPOOL_SIZE_THRESHOLD)) prefs.getFloat(KEY_MEMPOOL_SIZE_THRESHOLD, 0f) else 0f,
-            mempoolSizeAboveThreshold = prefs.getBoolean(KEY_MEMPOOL_SIZE_ABOVE_THRESHOLD, false),
-            feeRatesNotificationsEnabled = prefs.getBoolean(KEY_FEE_RATES_NOTIFICATIONS_ENABLED, false),
-            feeRatesCheckFrequency = if (prefs.contains(KEY_FEE_RATES_CHECK_FREQUENCY)) prefs.getInt(KEY_FEE_RATES_CHECK_FREQUENCY, 0) else 0,
-            selectedFeeRateType = FeeRateType.entries[prefs.getInt(KEY_SELECTED_FEE_RATE_TYPE, 0)],
-            feeRateThreshold = if (prefs.contains(KEY_FEE_RATE_THRESHOLD)) prefs.getInt(KEY_FEE_RATE_THRESHOLD, 0) else 0,
-            feeRateAboveThreshold = prefs.getBoolean(KEY_FEE_RATE_ABOVE_THRESHOLD, false),
-            txConfirmationEnabled = prefs.getBoolean(KEY_TX_CONFIRMATION_ENABLED, false),
-            txConfirmationFrequency = if (prefs.contains(KEY_TX_CONFIRMATION_FREQUENCY)) prefs.getInt(KEY_TX_CONFIRMATION_FREQUENCY, 0) else 0,
-            transactionId = prefs.getString(KEY_TRANSACTION_ID, "") ?: ""
+            blockNotificationsEnabled = getBoolean(KEY_BLOCK_NOTIFICATIONS_ENABLED),
+            blockCheckFrequency = getInt(KEY_BLOCK_CHECK_FREQUENCY),
+            newBlockNotificationEnabled = getBoolean(KEY_NEW_BLOCK_NOTIFICATIONS_ENABLED),
+            newBlockCheckFrequency = getInt(KEY_NEW_BLOCK_CHECK_FREQUENCY),
+            specificBlockNotificationEnabled = getBoolean(KEY_SPECIFIC_BLOCK_NOTIFICATIONS_ENABLED),
+            specificBlockCheckFrequency = getInt(KEY_SPECIFIC_BLOCK_CHECK_FREQUENCY),
+            targetBlockHeight = getIntOrNull(KEY_TARGET_BLOCK_HEIGHT),
+            mempoolSizeNotificationsEnabled = getBoolean(KEY_MEMPOOL_SIZE_NOTIFICATIONS_ENABLED),
+            mempoolCheckFrequency = getInt(KEY_MEMPOOL_CHECK_FREQUENCY),
+            mempoolSizeThreshold = getFloat(KEY_MEMPOOL_SIZE_THRESHOLD),
+            mempoolSizeAboveThreshold = getBoolean(KEY_MEMPOOL_SIZE_ABOVE_THRESHOLD),
+            feeRatesNotificationsEnabled = getBoolean(KEY_FEE_RATES_NOTIFICATIONS_ENABLED),
+            feeRatesCheckFrequency = getInt(KEY_FEE_RATES_CHECK_FREQUENCY),
+            selectedFeeRateType = FeeRateType.entries[getInt(KEY_SELECTED_FEE_RATE_TYPE)],
+            feeRateThreshold = feeRateThreshold,
+            feeRateAboveThreshold = getBoolean(KEY_FEE_RATE_ABOVE_THRESHOLD),
+            usePreciseFees = getBoolean(KEY_USE_PRECISE_FEES),
+            txConfirmationEnabled = getBoolean(KEY_TX_CONFIRMATION_ENABLED),
+            txConfirmationFrequency = getInt(KEY_TX_CONFIRMATION_FREQUENCY),
+            transactionId = getString(KEY_TRANSACTION_ID)
         )
     }
 
@@ -141,7 +188,7 @@ class SettingsRepository private constructor(context: Context) {
         _settings.value = settings
 
         // Save all notification settings except service state
-        prefs.edit().apply {
+        prefs.edit {
             putBoolean(KEY_BLOCK_NOTIFICATIONS_ENABLED, settings.blockNotificationsEnabled)
             if (settings.blockCheckFrequency == 0) remove(KEY_BLOCK_CHECK_FREQUENCY) else putInt(KEY_BLOCK_CHECK_FREQUENCY, settings.blockCheckFrequency)
             putBoolean(KEY_NEW_BLOCK_NOTIFICATIONS_ENABLED, settings.newBlockNotificationEnabled)
@@ -156,16 +203,19 @@ class SettingsRepository private constructor(context: Context) {
             putBoolean(KEY_FEE_RATES_NOTIFICATIONS_ENABLED, settings.feeRatesNotificationsEnabled)
             if (settings.feeRatesCheckFrequency == 0) remove(KEY_FEE_RATES_CHECK_FREQUENCY) else putInt(KEY_FEE_RATES_CHECK_FREQUENCY, settings.feeRatesCheckFrequency)
             putInt(KEY_SELECTED_FEE_RATE_TYPE, settings.selectedFeeRateType.ordinal)
-            if (settings.feeRateThreshold == 0) remove(KEY_FEE_RATE_THRESHOLD) else putInt(KEY_FEE_RATE_THRESHOLD, settings.feeRateThreshold)
+            if (settings.feeRateThreshold == 0.0) remove(KEY_FEE_RATE_THRESHOLD) else putFloat(KEY_FEE_RATE_THRESHOLD, settings.feeRateThreshold.toFloat())
             putBoolean(KEY_FEE_RATE_ABOVE_THRESHOLD, settings.feeRateAboveThreshold)
+            putBoolean(KEY_USE_PRECISE_FEES, settings.usePreciseFees)
             putBoolean(KEY_TX_CONFIRMATION_ENABLED, settings.txConfirmationEnabled)
             if (settings.txConfirmationFrequency == 0) remove(KEY_TX_CONFIRMATION_FREQUENCY) else putInt(KEY_TX_CONFIRMATION_FREQUENCY, settings.txConfirmationFrequency)
             putString(KEY_TRANSACTION_ID, settings.transactionId)
-        }.apply()
+        }
     }
 
     fun clearServerRestartFlag() {
-        prefs.edit().putBoolean(KEY_SERVER_NEEDS_RESTART, false).apply()
+        prefs.edit {
+            putBoolean(KEY_SERVER_NEEDS_RESTART, false)
+        }
     }
 
     fun needsRestartForServer(): Boolean {
@@ -179,13 +229,17 @@ class SettingsRepository private constructor(context: Context) {
     fun addSavedServer(url: String) {
         val currentServers = getSavedServers().toMutableSet()
         currentServers.add(url.trimEnd('/'))
-        prefs.edit().putStringSet(KEY_SAVED_SERVERS, currentServers).apply()
+        prefs.edit {
+            putStringSet(KEY_SAVED_SERVERS, currentServers)
+        }
     }
 
     fun removeSavedServer(url: String) {
         val currentServers = getSavedServers().toMutableSet()
         currentServers.remove(url)
-        prefs.edit().putStringSet(KEY_SAVED_SERVERS, currentServers).apply()
+        prefs.edit {
+            putStringSet(KEY_SAVED_SERVERS, currentServers)
+        }
     }
 
     fun isFirstLaunch(): Boolean {
@@ -193,7 +247,9 @@ class SettingsRepository private constructor(context: Context) {
     }
 
     fun setFirstLaunchComplete() {
-        prefs.edit().putBoolean(KEY_IS_FIRST_LAUNCH, false).apply()
+        prefs.edit {
+            putBoolean(KEY_IS_FIRST_LAUNCH, false)
+        }
     }
 
     fun getVisibleCards(): Set<String> {
@@ -201,6 +257,29 @@ class SettingsRepository private constructor(context: Context) {
     }
 
     fun saveVisibleCards(visibleCards: Set<String>) {
-        prefs.edit().putStringSet(KEY_VISIBLE_CARDS, visibleCards).apply()
+        prefs.edit {
+            putStringSet(KEY_VISIBLE_CARDS, visibleCards)
+        }
+    }
+
+    fun getCardOrder(): List<String> {
+        val orderString = prefs.getString(KEY_CARD_ORDER, null)
+        return orderString?.split(",")?.filter { it.isNotEmpty() } ?: DEFAULT_CARD_ORDER
+    }
+
+    fun saveCardOrder(order: List<String>) {
+        prefs.edit {
+            putString(KEY_CARD_ORDER, order.joinToString(","))
+        }
+    }
+
+    fun isFeeDistributionExpanded(): Boolean {
+        return prefs.getBoolean(KEY_FEE_DISTRIBUTION_EXPANDED, false)
+    }
+
+    fun setFeeDistributionExpanded(expanded: Boolean) {
+        prefs.edit {
+            putBoolean(KEY_FEE_DISTRIBUTION_EXPANDED, expanded)
+        }
     }
 } 

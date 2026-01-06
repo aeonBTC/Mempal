@@ -20,27 +20,37 @@ import com.example.mempal.api.WidgetNetworkClient
 class NetworkConnectivityReceiver : BroadcastReceiver() {
     companion object {
         private const val TAG = "NetworkReceiver"
+        @Volatile
         private var wasOffline = false
+        @Volatile
         private var wasInPowerSaveMode = false
+        @Volatile
         private var networkCallbackRegistered = false
+        @Volatile
         private var powerSaveModeReceiverRegistered = false
+        private var networkCallback: ConnectivityManager.NetworkCallback? = null
+        private var powerSaveReceiver: BroadcastReceiver? = null
+        private var connectivityManager: ConnectivityManager? = null
+        private val lock = Any()
 
         /**
          * Register the network callback to monitor connectivity changes
          */
         fun registerNetworkCallback(context: Context) {
-            if (networkCallbackRegistered) return
-            
-            try {
-                val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            synchronized(lock) {
+                if (networkCallbackRegistered) return
                 
-                val networkCallback = object : ConnectivityManager.NetworkCallback() {
+                try {
+                    connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+                    
+                    networkCallback = object : ConnectivityManager.NetworkCallback() {
                     override fun onAvailable(network: Network) {
                         // When a network becomes available
                         Log.d(TAG, "Network available")
                         
                         // Check if internet is actually accessible
-                        val capabilities = connectivityManager.getNetworkCapabilities(network)
+                        val cm = connectivityManager ?: return
+                        val capabilities = cm.getNetworkCapabilities(network)
                         val hasInternet = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true &&
                                           capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
                         
@@ -66,22 +76,55 @@ class NetworkConnectivityReceiver : BroadcastReceiver() {
                     }
                 }
                 
-                val networkRequest = NetworkRequest.Builder()
-                    .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
-                    .build()
+                    val networkRequest = NetworkRequest.Builder()
+                        .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                        .build()
                     
-                connectivityManager.registerNetworkCallback(networkRequest, networkCallback)
-                networkCallbackRegistered = true
-                
-                // Initialize the wasOffline state based on current connectivity
-                wasOffline = !WidgetNetworkClient.isNetworkAvailable(context)
-                
-                Log.d(TAG, "Network callback registered, initial offline state: $wasOffline")
-                
-                // Also register power save mode receiver
-                registerPowerSaveModeReceiver(context)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error registering network callback", e)
+                    connectivityManager?.registerNetworkCallback(networkRequest, networkCallback!!)
+                    networkCallbackRegistered = true
+                    
+                    // Initialize the wasOffline state based on current connectivity
+                    wasOffline = !WidgetNetworkClient.isNetworkAvailable(context)
+                    
+                    Log.d(TAG, "Network callback registered, initial offline state: $wasOffline")
+                    
+                    // Also register power save mode receiver
+                    registerPowerSaveModeReceiver(context)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error registering network callback", e)
+                    networkCallback = null
+                    connectivityManager = null
+                }
+            }
+        }
+        
+        /**
+         * Unregister the network callback and power save receiver
+         * Should be called when all widgets are disabled
+         */
+        fun unregisterNetworkCallback(context: Context) {
+            synchronized(lock) {
+                try {
+                    if (networkCallbackRegistered && networkCallback != null && connectivityManager != null) {
+                        connectivityManager?.unregisterNetworkCallback(networkCallback!!)
+                        networkCallback = null
+                        networkCallbackRegistered = false
+                        Log.d(TAG, "Network callback unregistered")
+                    } else {
+                        // No action needed if not registered
+                    }
+                    
+                    if (powerSaveModeReceiverRegistered && powerSaveReceiver != null) {
+                        context.applicationContext.unregisterReceiver(powerSaveReceiver!!)
+                        powerSaveReceiver = null
+                        powerSaveModeReceiverRegistered = false
+                        Log.d(TAG, "Power save receiver unregistered")
+                    } else {
+                        // No action needed if not registered
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error unregistering network callback", e)
+                }
             }
         }
         
@@ -89,44 +132,47 @@ class NetworkConnectivityReceiver : BroadcastReceiver() {
          * Register a receiver for power save mode changes
          */
         private fun registerPowerSaveModeReceiver(context: Context) {
-            if (powerSaveModeReceiverRegistered) return
-            
-            try {
-                // Get current power save mode state
-                val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-                wasInPowerSaveMode = powerManager.isPowerSaveMode
+            synchronized(lock) {
+                if (powerSaveModeReceiverRegistered) return
                 
-                // Create and register the receiver
-                val powerSaveReceiver = object : BroadcastReceiver() {
-                    override fun onReceive(context: Context, intent: Intent) {
-                        if (intent.action == PowerManager.ACTION_POWER_SAVE_MODE_CHANGED) {
-                            val powerManagerService = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-                            val isInPowerSaveMode = powerManagerService.isPowerSaveMode
-                            
-                            if (isInPowerSaveMode != wasInPowerSaveMode) {
-                                Log.d(TAG, "Power save mode changed: $isInPowerSaveMode")
-                                wasInPowerSaveMode = isInPowerSaveMode
+                try {
+                    // Get current power save mode state
+                    val powerManager = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+                    wasInPowerSaveMode = powerManager.isPowerSaveMode
+                    
+                    // Create and register the receiver
+                    powerSaveReceiver = object : BroadcastReceiver() {
+                        override fun onReceive(context: Context, intent: Intent) {
+                            if (intent.action == PowerManager.ACTION_POWER_SAVE_MODE_CHANGED) {
+                                val powerManagerService = context.getSystemService(Context.POWER_SERVICE) as PowerManager
+                                val isInPowerSaveMode = powerManagerService.isPowerSaveMode
                                 
-                                // Reset tap state to fix any unresponsive widgets
-                                WidgetUtils.resetTapState()
-                                
-                                // Reset network client cache
-                                WidgetNetworkClient.resetCache()
-                                
-                                // Refresh widgets to adapt to new power mode
-                                refreshAllWidgets(context)
+                                if (isInPowerSaveMode != wasInPowerSaveMode) {
+                                    Log.d(TAG, "Power save mode changed: $isInPowerSaveMode")
+                                    wasInPowerSaveMode = isInPowerSaveMode
+                                    
+                                    // Reset tap state to fix any unresponsive widgets
+                                    WidgetUtils.resetTapState()
+                                    
+                                    // Reset network client cache
+                                    WidgetNetworkClient.resetCache()
+                                    
+                                    // Refresh widgets to adapt to new power mode
+                                    refreshAllWidgets(context)
+                                }
                             }
                         }
                     }
+                
+                    val filter = IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
+                    context.applicationContext.registerReceiver(powerSaveReceiver!!, filter)
+                    powerSaveModeReceiverRegistered = true
+                    
+                    Log.d(TAG, "Power save mode receiver registered, initial state: $wasInPowerSaveMode")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error registering power save mode receiver", e)
+                    powerSaveReceiver = null
                 }
-                
-                val filter = IntentFilter(PowerManager.ACTION_POWER_SAVE_MODE_CHANGED)
-                context.applicationContext.registerReceiver(powerSaveReceiver, filter)
-                powerSaveModeReceiverRegistered = true
-                
-                Log.d(TAG, "Power save mode receiver registered, initial state: $wasInPowerSaveMode")
-            } catch (e: Exception) {
-                Log.e(TAG, "Error registering power save mode receiver", e)
             }
         }
         

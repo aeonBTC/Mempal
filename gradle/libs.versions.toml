@@ -1,5 +1,5 @@
 [versions]
-agp = "8.7.3"
+agp = "8.13.1"
 kotlin = "1.9.22"
 core-ktx = "1.15.0"
 lifecycle-runtime = "2.8.7"
@@ -18,7 +18,6 @@ constraintlayout = "2.2.0"
 tor-android = "0.4.7.14"
 jtorctl = "0.4.5.7"
 localbroadcastmanager = "1.1.0"
-pull-refresh = "0.32.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "core-ktx" }
@@ -34,7 +33,6 @@ androidx-runtime-livedata = { group = "androidx.compose.runtime", name = "runtim
 androidx-lifecycle-viewmodel = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle-runtime" }
 androidx-constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "constraintlayout" }
 androidx-core-splashscreen = { group = "androidx.core", name = "core-splashscreen", version.ref = "splash" }
-pull-refresh = { group = "com.google.accompanist", name = "accompanist-swiperefresh", version.ref = "pull-refresh" }
 
 retrofit = { group = "com.squareup.retrofit2", name = "retrofit", version.ref = "retrofit" }
 retrofit-converter-gson = { group = "com.squareup.retrofit2", name = "converter-gson", version.ref = "retrofit" }

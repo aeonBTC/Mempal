@@ -9,40 +9,47 @@ import com.example.mempal.api.NetworkClient
 import com.example.mempal.repository.SettingsRepository
 
 object WidgetUtils {
+    @Volatile
     private var lastTapTime = 0L
     private const val DOUBLE_TAP_TIMEOUT = 500L // ms
+    @Volatile
     private var serviceInitialized = false
+    @Volatile
     private var isFirstTap = true
+    private val tapLock = Any()
+    private val initLock = Any()
 
     /**
      * Check if a tap event is actually a double-tap
      * @return true if this is the second tap in a double-tap sequence
      */
     fun isDoubleTap(): Boolean {
-        val currentTime = SystemClock.elapsedRealtime()
-        val timeSinceLastTap = currentTime - lastTapTime
-        
-        // Safety check - if it's been a very long time since last tap (30 seconds),
-        // reset the state to avoid getting stuck
-        if (timeSinceLastTap > 30000) {
-            resetTapState()
-        }
-        
-        if (isFirstTap) {
-            // This is the first tap in a potential double-tap sequence
-            isFirstTap = false
-            lastTapTime = currentTime
-            return false
-        } else if (timeSinceLastTap < DOUBLE_TAP_TIMEOUT) {
-            // This is the second tap, within the timeout window
-            // Reset for next sequence
-            resetTapState()
-            return true
-        } else {
-            // Too much time has passed, start a new sequence
-            lastTapTime = currentTime
-            // Keep isFirstTap as false since this is a new first tap
-            return false
+        return synchronized(tapLock) {
+            val currentTime = SystemClock.elapsedRealtime()
+            val timeSinceLastTap = currentTime - lastTapTime
+            
+            // Safety check - if it's been a very long time since last tap (30 seconds),
+            // reset the state to avoid getting stuck
+            if (timeSinceLastTap > 30000) {
+                resetTapState()
+            }
+            
+            if (isFirstTap) {
+                // This is the first tap in a potential double-tap sequence
+                isFirstTap = false
+                lastTapTime = currentTime
+                false
+            } else if (timeSinceLastTap < DOUBLE_TAP_TIMEOUT) {
+                // This is the second tap, within the timeout window
+                // Reset for next sequence
+                resetTapState()
+                true
+            } else {
+                // Too much time has passed, start a new sequence
+                lastTapTime = currentTime
+                // Keep isFirstTap as false since this is a new first tap
+                false
+            }
         }
     }
     
@@ -52,8 +59,10 @@ object WidgetUtils {
      * tap detection works properly on the next attempt
      */
     fun resetTapState() {
-        isFirstTap = true
-        lastTapTime = 0L
+        synchronized(tapLock) {
+            isFirstTap = true
+            lastTapTime = 0L
+        }
     }
     
     /**
@@ -77,26 +86,27 @@ object WidgetUtils {
      * Ensure essential services are initialized for widget updates
      * This is important when the app is killed but widgets need to refresh
      */
-    @Synchronized
     fun ensureInitialized(context: Context) {
-        if (!serviceInitialized) {
-            try {
-                // Initialize settings repository
-                SettingsRepository.getInstance(context)
-                
-                // Try to initialize network client if needed
-                if (!NetworkClient.isInitialized.value) {
-                    try {
-                        NetworkClient.initialize(context)
-                    } catch (e: Exception) {
-                        // If main client fails, we'll fall back to WidgetNetworkClient
-                        e.printStackTrace()
+        synchronized(initLock) {
+            if (!serviceInitialized) {
+                try {
+                    // Initialize settings repository
+                    SettingsRepository.getInstance(context)
+                    
+                    // Try to initialize network client if needed
+                    if (!NetworkClient.isInitialized.value) {
+                        try {
+                            NetworkClient.initialize(context)
+                        } catch (e: Exception) {
+                            // If main client fails, we'll fall back to WidgetNetworkClient
+                            e.printStackTrace()
+                        }
                     }
+                    
+                    serviceInitialized = true
+                } catch (e: Exception) {
+                    e.printStackTrace()
                 }
-                
-                serviceInitialized = true
-            } catch (e: Exception) {
-                e.printStackTrace()
             }
         }
     }

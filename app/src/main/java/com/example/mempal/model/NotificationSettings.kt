@@ -24,7 +24,7 @@ data class NotificationSettings(
     val feeRatesNotificationsEnabled: Boolean = false,
     val feeRatesCheckFrequency: Int = 15,
     val selectedFeeRateType: FeeRateType = FeeRateType.NEXT_BLOCK,
-    val feeRateThreshold: Int = 0,
+    val feeRateThreshold: Double = 0.0,
     val feeRateAboveThreshold: Boolean = false,
     val isServiceEnabled: Boolean = false,
     val txConfirmationEnabled: Boolean = false,
@@ -32,9 +32,6 @@ data class NotificationSettings(
     val transactionId: String = "",
     val hasNotifiedForCurrentTx: Boolean = false,
     val hasNotifiedForMempoolSize: Boolean = false,
-    val hasNotifiedForFeeRate: Boolean = false
-) {
-    companion object {
-        const val MIN_CHECK_FREQUENCY = 1
-    }
-}
+    val hasNotifiedForFeeRate: Boolean = false,
+    val usePreciseFees: Boolean = false
+)

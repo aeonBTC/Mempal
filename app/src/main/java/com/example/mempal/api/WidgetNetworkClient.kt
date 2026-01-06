@@ -7,7 +7,6 @@ import android.util.Log
 import com.example.mempal.repository.SettingsRepository
 import com.google.gson.GsonBuilder
 import okhttp3.OkHttpClient
-import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.util.concurrent.TimeUnit
@@ -19,8 +18,35 @@ object WidgetNetworkClient {
     private var mempoolApi: MempoolApi? = null
     private var isNetworkAvailable = false
 
-    private val loggingInterceptor = HttpLoggingInterceptor().apply {
-        level = HttpLoggingInterceptor.Level.BODY
+    // Custom safe logging interceptor that only logs headers, never reads body to avoid crashes
+    private val safeLoggingInterceptor = okhttp3.Interceptor { chain ->
+        val request = chain.request()
+        val startTime = System.currentTimeMillis()
+        
+        // Log request
+        Log.d("OkHttp", "--> ${request.method} ${request.url}")
+        request.headers.forEach { header ->
+            Log.d("OkHttp", "${header.first}: ${header.second}")
+        }
+        Log.d("OkHttp", "--> END ${request.method}")
+        
+        // Proceed with request
+        val response = try {
+            chain.proceed(request)
+        } catch (e: Exception) {
+            Log.e("OkHttp", "<-- HTTP FAILED: ${e.message}")
+            throw e
+        }
+        
+        // Log response (only headers, never body)
+        val tookMs = System.currentTimeMillis() - startTime
+        Log.d("OkHttp", "<-- ${response.code} ${response.message} ${response.request.url} (${tookMs}ms)")
+        response.headers.forEach { header ->
+            Log.d("OkHttp", "${header.first}: ${header.second}")
+        }
+        Log.d("OkHttp", "<-- END HTTP")
+        
+        response
     }
 
     fun getMempoolApi(context: Context): MempoolApi {
@@ -106,12 +132,12 @@ object WidgetNetworkClient {
         }
 
         val clientBuilder = OkHttpClient.Builder()
-            .addInterceptor(loggingInterceptor)
+            .addInterceptor(safeLoggingInterceptor)
             .connectTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .readTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .writeTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
-            .addInterceptor { chain ->
+                .addInterceptor { chain ->
                 // Check network availability before proceeding
                 if (!isNetworkAvailable) {
                     throw java.io.IOException("No network connection available")
@@ -119,13 +145,47 @@ object WidgetNetworkClient {
                 
                 try {
                     var attempt = 0
-                    var response = chain.proceed(chain.request())
-                    while (!response.isSuccessful && attempt < 2) {
-                        attempt++
-                        response.close()
-                        response = chain.proceed(chain.request())
+                    var lastException: Exception? = null
+                    var response: okhttp3.Response? = null
+                    
+                    while (attempt < 3) {
+                        try {
+                            response?.close() // Close previous response if any
+                            response = chain.proceed(chain.request())
+                            
+                            if (response.isSuccessful) {
+                                return@addInterceptor response
+                            }
+                            
+                            // If not successful, close and retry
+                            response.close()
+                            attempt++
+                            
+                            // Only retry on server errors (5xx), not client errors (4xx)
+                            if (response.code < 500) {
+                                break
+                            }
+                            
+                            // Small delay before retry (we're still in the loop, so attempt < 3)
+                            Thread.sleep(100 * attempt.toLong())
+                        } catch (e: Exception) {
+                            lastException = e
+                            attempt++
+                            
+                            // Don't retry on certain exceptions or if we've exhausted attempts
+                            if (e is java.net.UnknownHostException || 
+                                e is java.net.ConnectException ||
+                                attempt >= 3) {
+                                throw e
+                            }
+                            
+                            // Small delay before retry (we're still in the loop, so attempt < 3)
+                            Thread.sleep(100 * attempt.toLong())
+                        }
                     }
-                    response
+                    
+                    // If we have a response, return it even if not successful
+                    response ?: throw lastException ?: java.io.IOException("Network request failed")
                 } catch (e: java.net.UnknownHostException) {
                     // Convert DNS resolution failures to a standard IOException
                     // This prevents crashes and allows proper error handling
@@ -134,6 +194,9 @@ object WidgetNetworkClient {
                 } catch (e: java.net.SocketTimeoutException) {
                     // Also handle timeout exceptions similarly
                     throw java.io.IOException("Network connection timed out", e)
+                } catch (e: java.net.ConnectException) {
+                    isNetworkAvailable = false
+                    throw java.io.IOException("Unable to connect to server", e)
                 }
             }
 
