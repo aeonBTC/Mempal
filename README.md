@@ -19,6 +19,6 @@ Key Features:
 
 * **Custom Servers:** Connect Mempal to a self-hosted mempool server so you don't have to trust third parties to obtain information about the Bitcoin network.
 
-* **Tor Integration:** Built in Tor integration to preserve your privacy when tracking TXIDs. 
+* **Tor Integration:** Built-in Tor integration to preserve your privacy when tracking TXIDs. 
 
-* **Widgets:** Receive quick and up-to-date information about fee rates, block height, and mempool size.
+* **Widgets:** Receive quick and up-to-date information about key network metrics.
