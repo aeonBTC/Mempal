@@ -1,8 +1,9 @@
 # Mempal
 
-<img width="310" height="625" alt="1" src="https://github.com/user-attachments/assets/f40b0833-89f3-4071-a729-0983c63654de" />
-<img width="310" height="625" alt="2" src="https://github.com/user-attachments/assets/3ad67232-5a28-489a-aa7a-206d30075761" />
-<img width="310" height="625" alt="5" src="https://github.com/user-attachments/assets/529cffd1-764b-400d-bf8b-148bc053a3b3" />
+<img width="198" height="400" alt="1" src="https://github.com/user-attachments/assets/f40b0833-89f3-4071-a729-0983c63654de" />
+<img width="198" height="400" alt="2" src="https://github.com/user-attachments/assets/3ad67232-5a28-489a-aa7a-206d30075761" />
+<img width="198" height="400" alt="3" src="https://github.com/user-attachments/assets/3b69e64d-6e35-4b6d-8854-a97fd249ac6f" />
+<img width="198" height="400" alt="5" src="https://github.com/user-attachments/assets/529cffd1-764b-400d-bf8b-148bc053a3b3" />
 
 
 
