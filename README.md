@@ -1,12 +1,6 @@
 # Mempal
 
-<img width="198" height="400" alt="1" src="https://github.com/user-attachments/assets/f40b0833-89f3-4071-a729-0983c63654de" />
-<img width="198" height="400" alt="2" src="https://github.com/user-attachments/assets/3ad67232-5a28-489a-aa7a-206d30075761" />
-<img width="198" height="400" alt="3" src="https://github.com/user-attachments/assets/3b69e64d-6e35-4b6d-8854-a97fd249ac6f" />
-<img width="198" height="400" alt="5" src="https://github.com/user-attachments/assets/529cffd1-764b-400d-bf8b-148bc053a3b3" />
-
-
-
+<img width="900" height="444" alt="Screenshot 2026-01-07 160256-gigapixel-standard v2-1x" src="https://github.com/user-attachments/assets/1abc8031-a6b3-4c9e-a381-1cee8c84f052" />
 
 [<img src="https://fdroid.gitlab.io/artwork/badge/get-it-on.png" alt="Get it on F-Droid" height="80">](https://f-droid.org/en/packages/com.example.mempal/)
 [<img src="https://user-images.githubusercontent.com/663460/26973090-f8fdc986-4d14-11e7-995a-e7c5e79ed925.png" alt="Get APK from GitHub" height="80">](https://github.com/aeonBTC/Mempal/releases)
