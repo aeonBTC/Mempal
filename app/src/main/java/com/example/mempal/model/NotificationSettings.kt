@@ -9,7 +9,6 @@ enum class FeeRateType {
 
 data class NotificationSettings(
     val blockNotificationsEnabled: Boolean = false,
-    val blockCheckFrequency: Int = 15,
     val newBlockNotificationEnabled: Boolean = false,
     val newBlockCheckFrequency: Int = 15,
     val hasNotifiedForNewBlock: Boolean = false,
@@ -29,6 +28,7 @@ data class NotificationSettings(
     val isServiceEnabled: Boolean = false,
     val txConfirmationEnabled: Boolean = false,
     val txConfirmationFrequency: Int = 15,
+    val targetConfirmations: Int = 1,
     val transactionId: String = "",
     val hasNotifiedForCurrentTx: Boolean = false,
     val hasNotifiedForMempoolSize: Boolean = false,

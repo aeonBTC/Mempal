@@ -10,6 +10,7 @@ import android.os.PowerManager
 import android.util.Log
 import androidx.work.CoroutineWorker
 import androidx.work.WorkerParameters
+import com.example.mempal.api.RateLimitGate
 import kotlinx.coroutines.*
 
 class WidgetUpdateWorker(
@@ -19,6 +20,10 @@ class WidgetUpdateWorker(
     private val tag = "WidgetUpdateWorker"
 
     override suspend fun doWork(): Result = withContext(Dispatchers.IO) {
+        if (RateLimitGate.isAnyBlocked()) {
+            Log.d(tag, "Skipping widget update: server rate limit backoff active")
+            return@withContext Result.success()
+        }
         var wakeLock: PowerManager.WakeLock? = null
         try {
             // Initialize important services that would normally be initialized by the app
@@ -35,6 +40,7 @@ class WidgetUpdateWorker(
             // Check if we have widgets that need updating
             val appWidgetManager = AppWidgetManager.getInstance(appContext)
             val widgetsToUpdate = mutableListOf<Pair<Class<out AppWidgetProvider>, String>>()
+            var totalWidgetInstances = 0
             
             // Check each widget type
             val widgetTypes = listOf(
@@ -49,6 +55,7 @@ class WidgetUpdateWorker(
                 val widgetIds = appWidgetManager.getAppWidgetIds(widgetComponent)
                 if (widgetIds.isNotEmpty()) {
                     widgetsToUpdate.add(widgetClass to action)
+                    totalWidgetInstances += widgetIds.size
                 }
             }
             
@@ -59,18 +66,30 @@ class WidgetUpdateWorker(
             }
             
             // Log update attempt for debugging
-            Log.d(tag, "Updating ${widgetsToUpdate.size} widget types")
+            Log.d(tag, "Updating ${widgetsToUpdate.size} widget types (${totalWidgetInstances} instances)")
             
             // Update all widgets in parallel for faster updates
             // PendingIntent.send() is non-blocking, so we can update all widgets simultaneously
-            coroutineScope {
-                widgetsToUpdate.forEachIndexed { index, (widgetClass, action) ->
-                    launch {
-                        updateWidget(appWidgetManager, widgetClass, action, index)
+            val completion = WidgetUpdateTracker.begin(totalWidgetInstances)
+            try {
+                coroutineScope {
+                    widgetsToUpdate.forEachIndexed { index, (widgetClass, action) ->
+                        launch {
+                            updateWidget(appWidgetManager, widgetClass, action, index)
+                        }
                     }
                 }
+
+                // Hold the wake lock until the providers report that their network
+                // work is done, bounded so a lost broadcast cannot hang the worker.
+                if (completion != null) {
+                    withTimeoutOrNull(WIDGET_COMPLETION_TIMEOUT_MS) {
+                        completion.await()
+                    }
+                }
+            } finally {
+                WidgetUpdateTracker.cancel()
             }
-            // All widget updates have been dispatched
 
             Result.success()
         } catch (e: Exception) {
@@ -133,5 +152,6 @@ class WidgetUpdateWorker(
 
     companion object {
         const val WORK_NAME = "widget_update_work"
+        private const val WIDGET_COMPLETION_TIMEOUT_MS = 20_000L
     }
 }

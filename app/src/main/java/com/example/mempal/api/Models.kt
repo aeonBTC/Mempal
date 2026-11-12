@@ -10,6 +10,12 @@ data class FeeRates(
     val isUsingFallbackPreciseFees: Boolean = false
 )
 
+data class MempoolBlock(
+    @SerializedName("id") val id: String = "",
+    @SerializedName("height") val height: Int = 0,
+    @SerializedName("timestamp") val timestamp: Long = 0L
+)
+
 data class MempoolInfo(
     @SerializedName("vsize") val vsize: Long = 0L,
     @SerializedName("total_fee") val totalFee: Double = 0.0,

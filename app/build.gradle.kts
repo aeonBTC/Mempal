@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.compose.compiler)
 }
 
 android {
@@ -19,10 +20,9 @@ android {
         applicationId = "com.example.mempal"
         minSdk = 24
         targetSdk = 35
-        versionCode = 20
-        versionName = "2.0"
+        versionCode = 21
+        versionName = "2.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        multiDexEnabled = true
     }
 
     buildTypes {
@@ -42,26 +42,22 @@ android {
         buildConfig = true
     }
 
-    composeOptions {
-        kotlinCompilerExtensionVersion = libs.versions.compose.compiler.get()
-    }
-
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
-    }
-
-    kotlinOptions {
-        jvmTarget = "17"
-        freeCompilerArgs += listOf(
-            "-opt-in=androidx.compose.material3.ExperimentalMaterial3Api"
-        )
     }
 
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
+    }
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        freeCompilerArgs.add("-opt-in=androidx.compose.material3.ExperimentalMaterial3Api")
     }
 }
 
@@ -74,7 +70,6 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
-    implementation(libs.androidx.constraintlayout)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
@@ -96,23 +91,18 @@ dependencies {
     implementation(libs.okhttp)
     implementation(libs.okhttp.logging)
 
-    // For experimental Material APIs
-    implementation(libs.androidx.material3)
-
     // Material icons extended
     implementation(libs.androidx.material.icons)
-    implementation(libs.androidx.runtime.livedata)
 
     implementation(libs.androidx.core.splashscreen)
-    implementation("androidx.multidex:multidex:2.0.1")
-    implementation(libs.androidx.core.ktx)
-    implementation("androidx.appcompat:appcompat:1.7.1")
+    // Explicitly use the 16 KB page-size compatible native library build.
+    implementation(libs.androidx.graphics.path)
+    // AppCompat attrs are referenced by the widget layouts/drawables.
+    implementation(libs.androidx.appcompat)
 
     implementation(libs.tor.android)
-    implementation(libs.jtorctl)
-    implementation(libs.androidx.localbroadcastmanager)
 
     // WorkManager
-    implementation("androidx.work:work-runtime-ktx:2.10.1")
-    implementation("androidx.work:work-runtime:2.10.1")
+    implementation(libs.androidx.work.runtime.ktx)
+    implementation(libs.androidx.work.runtime)
 }

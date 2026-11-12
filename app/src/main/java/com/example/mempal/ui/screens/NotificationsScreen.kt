@@ -28,7 +28,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -66,9 +66,7 @@ data class NotificationSectionConfig(
     val title: String,
     val description: String,
     val enabled: Boolean,
-    val frequency: Int,
-    val onEnabledChange: (Boolean) -> Unit,
-    val onFrequencyChange: (Int) -> Unit
+    val onEnabledChange: (Boolean) -> Unit
 )
 
 data class SpecificBlockConfig(
@@ -132,7 +130,8 @@ fun NotificationsScreen(
         if (settings.txConfirmationEnabled) {
             if (settings.transactionId.isEmpty() || 
                 settings.transactionId.length < 64 || 
-                settings.txConfirmationFrequency <= 0) {
+                settings.txConfirmationFrequency <= 0 ||
+                settings.targetConfirmations <= 0) {
                 return "Please fill out required notification fields"
             }
         }
@@ -177,12 +176,7 @@ fun NotificationsScreen(
                             return@Button
                         }
                     }
-                    val serviceIntent = Intent(context, NotificationService::class.java)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        context.startForegroundService(serviceIntent)
-                    } else {
-                        context.startService(serviceIntent)
-                    }
+                    NotificationService.start(context)
                 } else {
                     val serviceIntent = Intent(context, NotificationService::class.java)
                     context.stopService(serviceIntent)
@@ -233,12 +227,8 @@ fun NotificationsScreen(
                 title = "Blocks",
                 description = "Get notified when blocks are mined.",
                 enabled = settings.blockNotificationsEnabled,
-                frequency = settings.blockCheckFrequency,
                 onEnabledChange = { newSettings ->
                     settingsRepository.updateSettings(settings.copy(blockNotificationsEnabled = newSettings))
-                },
-                onFrequencyChange = { newSettings ->
-                    settingsRepository.updateSettings(settings.copy(blockCheckFrequency = newSettings))
                 }
             ),
             timeUnitLabel = timeUnitLabel,
@@ -325,6 +315,7 @@ fun NotificationsScreen(
         TransactionConfirmationSection(
             enabled = settings.txConfirmationEnabled,
             frequency = settings.txConfirmationFrequency,
+            targetConfirmations = settings.targetConfirmations,
             transactionId = settings.transactionId,
             timeUnitLabel = timeUnitLabel,
             onEnabledChange = { newSettings ->
@@ -332,6 +323,14 @@ fun NotificationsScreen(
             },
             onFrequencyChange = { newSettings ->
                 settingsRepository.updateSettings(settings.copy(txConfirmationFrequency = newSettings))
+            },
+            onTargetConfirmationsChange = { newTarget ->
+                settingsRepository.updateSettings(
+                    settings.copy(
+                        targetConfirmations = newTarget,
+                        hasNotifiedForCurrentTx = false
+                    )
+                )
             },
             onTransactionIdChange = { newTxId ->
                 settingsRepository.updateSettings(
@@ -789,7 +788,7 @@ private fun FeeRatesNotificationSection(
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
                             colors = OutlinedTextFieldDefaults.colors(
                                 unfocusedBorderColor = AppColors.DataGray,
                                 focusedBorderColor = AppColors.Orange,
@@ -849,10 +848,12 @@ private fun FeeRatesNotificationSection(
 private fun TransactionConfirmationSection(
     enabled: Boolean,
     frequency: Int,
+    targetConfirmations: Int,
     transactionId: String,
     timeUnitLabel: String,
     onEnabledChange: (Boolean) -> Unit,
     onFrequencyChange: (Int) -> Unit,
+    onTargetConfirmationsChange: (Int) -> Unit,
     onTransactionIdChange: (String) -> Unit
 ) {
     Card(
@@ -896,7 +897,7 @@ private fun TransactionConfirmationSection(
                 )
             }
             Text(
-                text = "Get notified when a transaction is confirmed.",
+                text = "Get notified when a transaction reaches a number of confirmations.",
                 style = MaterialTheme.typography.titleMedium,
                 color = AppColors.DataGray
             )
@@ -918,6 +919,13 @@ private fun TransactionConfirmationSection(
                             unfocusedTextColor = AppColors.DataGray,
                             focusedTextColor = AppColors.Orange
                         )
+                    )
+                    NumericTextField(
+                        value = if (targetConfirmations == 0) "" else targetConfirmations.toString(),
+                        onValueChange = {
+                            onTargetConfirmationsChange(if (it.isEmpty()) 0 else it.toIntOrNull() ?: 0)
+                        },
+                        label = "Confirmations"
                     )
                     NumericTextField(
                         value = if (frequency == 0) "" else frequency.toString(),

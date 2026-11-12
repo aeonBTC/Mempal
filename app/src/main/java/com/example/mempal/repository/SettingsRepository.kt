@@ -7,7 +7,6 @@ import com.example.mempal.model.NotificationSettings
 import com.example.mempal.model.FeeRateType
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import java.lang.ref.WeakReference
 
 class SettingsRepository private constructor(context: Context) {
     private val applicationContext = context.applicationContext
@@ -21,7 +20,7 @@ class SettingsRepository private constructor(context: Context) {
 
     companion object {
         @Volatile
-        private var instance: WeakReference<SettingsRepository>? = null
+        private var instance: SettingsRepository? = null
         private const val KEY_API_URL = "api_url"
         private const val KEY_UPDATE_FREQUENCY = "widget_update_frequency"
         private const val DEFAULT_API_URL = "https://mempool.space"
@@ -33,7 +32,6 @@ class SettingsRepository private constructor(context: Context) {
 
         // Notification Settings Keys
         private const val KEY_BLOCK_NOTIFICATIONS_ENABLED = "block_notifications_enabled"
-        private const val KEY_BLOCK_CHECK_FREQUENCY = "block_check_frequency"
         private const val KEY_NEW_BLOCK_NOTIFICATIONS_ENABLED = "new_block_notifications_enabled"
         private const val KEY_NEW_BLOCK_CHECK_FREQUENCY = "new_block_check_frequency"
         private const val KEY_SPECIFIC_BLOCK_NOTIFICATIONS_ENABLED = "specific_block_notifications_enabled"
@@ -51,7 +49,15 @@ class SettingsRepository private constructor(context: Context) {
         private const val KEY_USE_PRECISE_FEES = "use_precise_fees"
         private const val KEY_TX_CONFIRMATION_ENABLED = "tx_confirmation_enabled"
         private const val KEY_TX_CONFIRMATION_FREQUENCY = "tx_confirmation_frequency"
+        private const val KEY_TX_CONFIRMATIONS_TARGET = "tx_confirmations_target"
+        private const val DEFAULT_TX_CONFIRMATIONS_TARGET = 1
         private const val KEY_TRANSACTION_ID = "transaction_id"
+        private const val KEY_IS_SERVICE_ENABLED = "is_service_enabled"
+        private const val KEY_HAS_NOTIFIED_FOR_NEW_BLOCK = "has_notified_for_new_block"
+        private const val KEY_HAS_NOTIFIED_FOR_TARGET_BLOCK = "has_notified_for_target_block"
+        private const val KEY_HAS_NOTIFIED_FOR_CURRENT_TX = "has_notified_for_current_tx"
+        private const val KEY_HAS_NOTIFIED_FOR_MEMPOOL_SIZE = "has_notified_for_mempool_size"
+        private const val KEY_HAS_NOTIFIED_FOR_FEE_RATE = "has_notified_for_fee_rate"
 
         private const val KEY_VISIBLE_CARDS = "visible_cards"
         private const val KEY_CARD_ORDER = "card_order"
@@ -73,22 +79,9 @@ class SettingsRepository private constructor(context: Context) {
         private const val KEY_FEE_DISTRIBUTION_EXPANDED = "fee_distribution_expanded"
 
         fun getInstance(context: Context): SettingsRepository {
-            val currentInstance = instance?.get()
-            if (currentInstance != null) {
-                return currentInstance
-            }
-
+            instance?.let { return it }
             return synchronized(this) {
-                val newInstance = SettingsRepository(context)
-                instance = WeakReference(newInstance)
-                newInstance
-            }
-        }
-
-        fun cleanup() {
-            synchronized(this) {
-                instance?.clear()
-                instance = null
+                instance ?: SettingsRepository(context).also { instance = it }
             }
         }
     }
@@ -162,7 +155,6 @@ class SettingsRepository private constructor(context: Context) {
         
         return NotificationSettings(
             blockNotificationsEnabled = getBoolean(KEY_BLOCK_NOTIFICATIONS_ENABLED),
-            blockCheckFrequency = getInt(KEY_BLOCK_CHECK_FREQUENCY),
             newBlockNotificationEnabled = getBoolean(KEY_NEW_BLOCK_NOTIFICATIONS_ENABLED),
             newBlockCheckFrequency = getInt(KEY_NEW_BLOCK_CHECK_FREQUENCY),
             specificBlockNotificationEnabled = getBoolean(KEY_SPECIFIC_BLOCK_NOTIFICATIONS_ENABLED),
@@ -174,23 +166,37 @@ class SettingsRepository private constructor(context: Context) {
             mempoolSizeAboveThreshold = getBoolean(KEY_MEMPOOL_SIZE_ABOVE_THRESHOLD),
             feeRatesNotificationsEnabled = getBoolean(KEY_FEE_RATES_NOTIFICATIONS_ENABLED),
             feeRatesCheckFrequency = getInt(KEY_FEE_RATES_CHECK_FREQUENCY),
-            selectedFeeRateType = FeeRateType.entries[getInt(KEY_SELECTED_FEE_RATE_TYPE)],
+            selectedFeeRateType = FeeRateType.entries.getOrElse(getInt(KEY_SELECTED_FEE_RATE_TYPE)) {
+                FeeRateType.NEXT_BLOCK
+            },
             feeRateThreshold = feeRateThreshold,
             feeRateAboveThreshold = getBoolean(KEY_FEE_RATE_ABOVE_THRESHOLD),
             usePreciseFees = getBoolean(KEY_USE_PRECISE_FEES),
             txConfirmationEnabled = getBoolean(KEY_TX_CONFIRMATION_ENABLED),
             txConfirmationFrequency = getInt(KEY_TX_CONFIRMATION_FREQUENCY),
-            transactionId = getString(KEY_TRANSACTION_ID)
+            targetConfirmations = getInt(KEY_TX_CONFIRMATIONS_TARGET, DEFAULT_TX_CONFIRMATIONS_TARGET)
+                .coerceAtLeast(DEFAULT_TX_CONFIRMATIONS_TARGET),
+            transactionId = getString(KEY_TRANSACTION_ID),
+            isServiceEnabled = getBoolean(KEY_IS_SERVICE_ENABLED),
+            hasNotifiedForNewBlock = getBoolean(KEY_HAS_NOTIFIED_FOR_NEW_BLOCK),
+            hasNotifiedForTargetBlock = getBoolean(KEY_HAS_NOTIFIED_FOR_TARGET_BLOCK),
+            hasNotifiedForCurrentTx = getBoolean(KEY_HAS_NOTIFIED_FOR_CURRENT_TX),
+            hasNotifiedForMempoolSize = getBoolean(KEY_HAS_NOTIFIED_FOR_MEMPOOL_SIZE),
+            hasNotifiedForFeeRate = getBoolean(KEY_HAS_NOTIFIED_FOR_FEE_RATE)
         )
     }
 
     fun updateSettings(settings: NotificationSettings) {
         _settings.value = settings
 
-        // Save all notification settings except service state
         prefs.edit {
+            putBoolean(KEY_IS_SERVICE_ENABLED, settings.isServiceEnabled)
+            putBoolean(KEY_HAS_NOTIFIED_FOR_NEW_BLOCK, settings.hasNotifiedForNewBlock)
+            putBoolean(KEY_HAS_NOTIFIED_FOR_TARGET_BLOCK, settings.hasNotifiedForTargetBlock)
+            putBoolean(KEY_HAS_NOTIFIED_FOR_CURRENT_TX, settings.hasNotifiedForCurrentTx)
+            putBoolean(KEY_HAS_NOTIFIED_FOR_MEMPOOL_SIZE, settings.hasNotifiedForMempoolSize)
+            putBoolean(KEY_HAS_NOTIFIED_FOR_FEE_RATE, settings.hasNotifiedForFeeRate)
             putBoolean(KEY_BLOCK_NOTIFICATIONS_ENABLED, settings.blockNotificationsEnabled)
-            if (settings.blockCheckFrequency == 0) remove(KEY_BLOCK_CHECK_FREQUENCY) else putInt(KEY_BLOCK_CHECK_FREQUENCY, settings.blockCheckFrequency)
             putBoolean(KEY_NEW_BLOCK_NOTIFICATIONS_ENABLED, settings.newBlockNotificationEnabled)
             if (settings.newBlockCheckFrequency == 0) remove(KEY_NEW_BLOCK_CHECK_FREQUENCY) else putInt(KEY_NEW_BLOCK_CHECK_FREQUENCY, settings.newBlockCheckFrequency)
             putBoolean(KEY_SPECIFIC_BLOCK_NOTIFICATIONS_ENABLED, settings.specificBlockNotificationEnabled)
@@ -208,6 +214,11 @@ class SettingsRepository private constructor(context: Context) {
             putBoolean(KEY_USE_PRECISE_FEES, settings.usePreciseFees)
             putBoolean(KEY_TX_CONFIRMATION_ENABLED, settings.txConfirmationEnabled)
             if (settings.txConfirmationFrequency == 0) remove(KEY_TX_CONFIRMATION_FREQUENCY) else putInt(KEY_TX_CONFIRMATION_FREQUENCY, settings.txConfirmationFrequency)
+            if (settings.targetConfirmations <= DEFAULT_TX_CONFIRMATIONS_TARGET) {
+                remove(KEY_TX_CONFIRMATIONS_TARGET)
+            } else {
+                putInt(KEY_TX_CONFIRMATIONS_TARGET, settings.targetConfirmations)
+            }
             putString(KEY_TRANSACTION_ID, settings.transactionId)
         }
     }

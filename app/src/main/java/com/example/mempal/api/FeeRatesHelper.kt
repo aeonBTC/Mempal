@@ -98,17 +98,8 @@ object FeeRatesHelper {
             try {
                 val body = response.body()
                 if (body != null && body.hasValidData()) {
-                    // For custom servers, always try fallback first to get actual precise fees
-                    // Some custom servers return 200 OK with regular fees when precise endpoint is called
-                    if (isCustomServer) {
-                        val fallbackResponse = tryFallbackPreciseFees()
-                        if (fallbackResponse != null) {
-                            // Fallback succeeded, use it instead
-                            closeResponseSafely(response)
-                            return fallbackResponse
-                        }
-                        // Fallback failed, use custom server's response
-                    }
+                    // The server returned real data; use it instead of adding a
+                    // second request to mempool.space on every refresh.
                     return response
                 } else {
                     // Response successful but invalid data - try fallback for custom servers
@@ -141,14 +132,6 @@ object FeeRatesHelper {
                 if (fallbackResponse != null) {
                     return fallbackResponse
                 }
-            }
-        }
-
-        // Server is reachable but missing data - try fallback if custom server (one more time)
-        if (isCustomServer && serverReachable) {
-            val fallbackResponse = tryFallbackPreciseFees()
-            if (fallbackResponse != null) {
-                return fallbackResponse
             }
         }
 

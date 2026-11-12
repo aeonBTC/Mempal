@@ -11,6 +11,7 @@ import android.net.NetworkCapabilities
 import android.net.NetworkRequest
 import android.os.PowerManager
 import android.util.Log
+import com.example.mempal.api.RateLimitGate
 import com.example.mempal.api.WidgetNetworkClient
 
 /**
@@ -180,6 +181,10 @@ class NetworkConnectivityReceiver : BroadcastReceiver() {
          * Refresh all widget types
          */
         private fun refreshAllWidgets(context: Context) {
+            if (RateLimitGate.isAnyBlocked()) {
+                Log.d(TAG, "Server rate limit backoff active, skipping widget refresh")
+                return
+            }
             refreshWidgetType(context, BlockHeightWidget::class.java, BlockHeightWidget.REFRESH_ACTION)
             refreshWidgetType(context, MempoolSizeWidget::class.java, MempoolSizeWidget.REFRESH_ACTION)
             refreshWidgetType(context, FeeRatesWidget::class.java, FeeRatesWidget.REFRESH_ACTION)
@@ -200,29 +205,6 @@ class NetworkConnectivityReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
         when (intent.action) {
-            // Handle connectivity changes
-            @Suppress("DEPRECATION") // Used for backwards compatibility on older devices
-            ConnectivityManager.CONNECTIVITY_ACTION -> {
-                // Use our reliable connectivity check
-                val hasNetwork = WidgetNetworkClient.isNetworkAvailable(context)
-                
-                if (hasNetwork && wasOffline) {
-                    Log.d(TAG, "Internet restored (via broadcast), refreshing widgets")
-                    wasOffline = false
-                    
-                    // Reset NetworkClient state
-                    WidgetNetworkClient.resetCache()
-                    
-                    // Reset tap state
-                    WidgetUtils.resetTapState()
-                    
-                    // Refresh all widgets
-                    refreshAllWidgets(context)
-                } else if (!hasNetwork) {
-                    wasOffline = true
-                }
-            }
-            
             // Handle power save mode changes
             PowerManager.ACTION_POWER_SAVE_MODE_CHANGED -> {
                 val powerManagerService = context.getSystemService(Context.POWER_SERVICE) as PowerManager

@@ -23,7 +23,7 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -64,7 +64,7 @@ enum class AddressType(val displayName: String, val inputVBytes: Double, val out
 @Composable
 fun FeeEstimatorScreen(
     modifier: Modifier = Modifier,
-    viewModel: MainViewModel? = null,
+    viewModel: MainViewModel,
     numInputs: String,
     onNumInputsChange: (String) -> Unit,
     numOutputs: String,
@@ -82,7 +82,8 @@ fun FeeEstimatorScreen(
     totalKeys: String,
     onTotalKeysChange: (String) -> Unit
 ) {
-    val feeRates = viewModel?.feeRates?.observeAsState()?.value
+    val feeRatesState by viewModel.feeRates.observeAsState()
+    val feeRates = feeRatesState
     val context = LocalContext.current
     val settingsRepository = remember { SettingsRepository.getInstance(context) }
     val currentSettings by settingsRepository.settings.collectAsState()
@@ -165,14 +166,14 @@ fun FeeEstimatorScreen(
     val totalVBytes = txOverhead + (inputVBytes * inputCount) + (outputVBytes * outputCount)
 
     val effectiveFeeRate = when {
-        selectedFeeRateOption == "Custom" -> customFeeRate.toDoubleOrNull() ?: 1.0
-        selectedFeeRateOption == "Next Block" && feeRates != null -> feeRates.fastestFee
-        selectedFeeRateOption == "3 Blocks" && feeRates != null -> feeRates.halfHourFee
-        selectedFeeRateOption == "6 Blocks" && feeRates != null -> feeRates.hourFee
-        else -> 1.0
+        selectedFeeRateOption == "Custom" -> customFeeRate.toDoubleOrNull()
+        selectedFeeRateOption == "Next Block" -> feeRates?.fastestFee
+        selectedFeeRateOption == "3 Blocks" -> feeRates?.halfHourFee
+        selectedFeeRateOption == "6 Blocks" -> feeRates?.hourFee
+        else -> null
     }
 
-    val estimatedFee = (totalVBytes * effectiveFeeRate).toLong()
+    val estimatedFee = effectiveFeeRate?.let { (totalVBytes * it).toLong() }
 
     Column(
         modifier = modifier
@@ -218,7 +219,7 @@ fun FeeEstimatorScreen(
                         },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .menuAnchor(MenuAnchorType.PrimaryNotEditable),
+                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = AppColors.Orange,
                             unfocusedBorderColor = AppColors.DataGray,
@@ -442,8 +443,9 @@ fun FeeEstimatorScreen(
                     IconButton(
                         onClick = {
                             rotationAngle += 360f
-                            viewModel?.let { vm ->
+                            viewModel.let { vm ->
                                 scope.launch {
+                                    if (vm.isMainRefreshing.value) return@launch
                                     val usePrecise = settingsRepository.settings.value.usePreciseFees
                                     vm.setUsePreciseFees(usePrecise)
                                     vm.refreshData(usePrecise, isManualRefresh = true)
@@ -502,7 +504,7 @@ fun FeeEstimatorScreen(
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = feeRateExpanded) },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .menuAnchor(if (selectedFeeRateOption == "Custom") MenuAnchorType.PrimaryEditable else MenuAnchorType.PrimaryNotEditable),
+                            .menuAnchor(if (selectedFeeRateOption == "Custom") ExposedDropdownMenuAnchorType.PrimaryEditable else ExposedDropdownMenuAnchorType.PrimaryNotEditable),
                         keyboardOptions = KeyboardOptions(
                             keyboardType = if (usePreciseFees) KeyboardType.Decimal else KeyboardType.Number
                         ),
@@ -597,22 +599,36 @@ fun FeeEstimatorScreen(
                     color = AppColors.DataGray
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = String.format(Locale.US, "%,d", estimatedFee),
-                    style = MaterialTheme.typography.headlineLarge,
-                    color = AppColors.Orange
-                )
-                Text(
-                    text = "sats",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = AppColors.Orange.copy(alpha = 0.8f)
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "${String.format(Locale.US, "%.2f", totalVBytes)} vB × ${formatFeeRate(effectiveFeeRate)} sat/vB",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = AppColors.DataGray.copy(alpha = 0.7f)
-                )
+                if (estimatedFee != null) {
+                    val rate = effectiveFeeRate
+                    Text(
+                        text = String.format(Locale.US, "%,d", estimatedFee),
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = AppColors.Orange
+                    )
+                    Text(
+                        text = "sats",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = AppColors.Orange.copy(alpha = 0.8f)
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "${String.format(Locale.US, "%.2f", totalVBytes)} vB × ${formatFeeRate(rate)} sat/vB",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AppColors.DataGray.copy(alpha = 0.7f)
+                    )
+                } else {
+                    Text(
+                        text = "Fee data unavailable",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = AppColors.DataGray.copy(alpha = 0.7f)
+                    )
+                    Text(
+                        text = "Select a fee rate or wait for the dashboard to load.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = AppColors.DataGray.copy(alpha = 0.6f)
+                    )
+                }
             }
         }
 

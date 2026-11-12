@@ -6,9 +6,6 @@ import android.util.Log
 import android.widget.RemoteViews
 import com.example.mempal.R
 import com.example.mempal.api.MempoolApi
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import java.util.Locale
 import kotlin.math.ceil
 
@@ -34,42 +31,28 @@ class MempoolSizeWidget : BaseMempalWidget() {
         context: Context,
         api: MempoolApi,
         views: RemoteViews
-    ): Boolean = coroutineScope {
-        var success = false
-        
-        try {
-            val mempoolInfoDeferred = async(SupervisorJob() + coroutineContext) {
-                try {
-                    api.getMempoolInfo()
-                } catch (e: Exception) {
-                    Log.e(TAG, "Mempool info request failed: ${e.message}")
-                    null
-                }
-            }
-            
-            val response = mempoolInfoDeferred.await()
-            
-            if (response?.isSuccessful == true) {
-                response.body()?.let { mempoolInfo ->
-                    val sizeInMB = mempoolInfo.vsize / 1_000_000.0
-                    views.setTextViewText(
-                        R.id.mempool_size,
-                        String.format(Locale.US, "%.2f vMB", sizeInMB)
-                    )
-                    
-                    val blocksToClean = ceil(sizeInMB / 1.5).toInt()
-                    views.setTextViewText(
-                        R.id.mempool_blocks_to_clear,
-                        "$blocksToClean ${if (blocksToClean == 1) "block" else "blocks"} to clear"
-                    )
-                    success = true
-                }
-            }
+    ): Boolean {
+        return try {
+            val mempoolInfo = WidgetDataProvider.fetchMempoolInfo(api) ?: return false
+
+            val sizeInMB = mempoolInfo.vsize / 1_000_000.0
+            views.setTextViewText(
+                R.id.mempool_size,
+                String.format(Locale.US, "%.2f vMB", sizeInMB)
+            )
+
+            val blocksToClean = ceil(sizeInMB / 1.5).toInt()
+            views.setTextViewText(
+                R.id.mempool_blocks_to_clear,
+                "$blocksToClean ${if (blocksToClean == 1) "block" else "blocks"} to clear"
+            )
+            true
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Error in fetchAndUpdateData: ${e.message}")
+            false
         }
-        
-        success
     }
     
     override fun setLoadingState(views: RemoteViews) {

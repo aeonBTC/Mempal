@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.BatteryManager
 import android.os.PowerManager
 import android.os.SystemClock
-import android.util.Log
 import androidx.work.*
 import com.example.mempal.repository.SettingsRepository
 import java.util.concurrent.TimeUnit
@@ -13,9 +12,7 @@ object WidgetUpdater {
     private const val WAKE_LOCK_TAG = "mempal:widget_update_wake_lock"
     private const val MIN_UPDATE_INTERVAL = 15L // Minimum update interval in minutes
     private const val ONE_TIME_WORK_NAME = "widget_one_time_update_work"
-    private const val DELAYED_WORK_NAME = "widget_delayed_update_work"
     private const val MIN_UPDATE_THRESHOLD = 5 * 60 * 1000L // 5 minutes in milliseconds
-    private const val TAG = "WidgetUpdater"
     
     // Track the last time widgets were updated
     private var lastUpdateTime = 0L
@@ -52,7 +49,6 @@ object WidgetUpdater {
         // Cancel any existing work first
         WorkManager.getInstance(context).cancelUniqueWork(WidgetUpdateWorker.WORK_NAME)
         WorkManager.getInstance(context).cancelUniqueWork(ONE_TIME_WORK_NAME)
-        WorkManager.getInstance(context).cancelUniqueWork(DELAYED_WORK_NAME)
 
         // Create standard network constraints
         val constraints = Constraints.Builder()
@@ -98,26 +94,6 @@ object WidgetUpdater {
             expeditedRequest
         )
         
-        // 2b. Also schedule a regular (non-expedited) delayed job
-        try {
-            val delayTime = (updateInterval / 2).coerceAtMost(30)
-            Log.d(TAG, "Scheduling delayed update for $delayTime minutes from now")
-            
-            val delayedRequest = OneTimeWorkRequestBuilder<WidgetUpdateWorker>()
-                .setConstraints(constraints)
-                .setInputData(inputData)
-                .setInitialDelay(delayTime, TimeUnit.MINUTES)
-                .build()
-                
-            WorkManager.getInstance(context).enqueueUniqueWork(
-                DELAYED_WORK_NAME,
-                ExistingWorkPolicy.REPLACE,
-                delayedRequest
-            )
-        } catch (e: Exception) {
-            Log.e(TAG, "Error scheduling delayed update", e)
-        }
-        
         // Update the last update time
         lastUpdateTime = SystemClock.elapsedRealtime()
     }
@@ -161,7 +137,6 @@ object WidgetUpdater {
     fun cancelUpdates(context: Context) {
         WorkManager.getInstance(context).cancelUniqueWork(WidgetUpdateWorker.WORK_NAME)
         WorkManager.getInstance(context).cancelUniqueWork(ONE_TIME_WORK_NAME)
-        WorkManager.getInstance(context).cancelUniqueWork(DELAYED_WORK_NAME)
     }
 
     fun acquireWakeLock(context: Context): PowerManager.WakeLock? {

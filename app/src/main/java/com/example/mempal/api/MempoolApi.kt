@@ -7,6 +7,14 @@ import retrofit2.http.GET
 import retrofit2.http.Path
 
 interface MempoolApi {
+    /**
+     * Returns the most recent blocks (newest first) in a single request.
+     * Each entry carries height, hash and timestamp, so this replaces the
+     * tip/height -> tip/hash -> block/{hash} chain where supported.
+     */
+    @GET("api/v1/blocks")
+    suspend fun getRecentBlocks(): Response<List<MempoolBlock>>
+
     @GET("api/blocks/tip/height")
     suspend fun getBlockHeight(): Response<Int>
 

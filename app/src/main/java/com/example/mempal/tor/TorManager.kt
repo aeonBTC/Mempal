@@ -22,12 +22,10 @@ enum class TorStatus {
 }
 
 class TorManager private constructor() {
-    private var torService: TorService? = null
     private val _torStatus = MutableStateFlow(TorStatus.DISCONNECTED)
     val torStatus: StateFlow<TorStatus> = _torStatus
     private var dataDir: File? = null
     private var prefsRef: WeakReference<SharedPreferences>? = null
-    private val _proxyReady = MutableStateFlow(false)
     private var scope: CoroutineScope? = null
     private var isForegroundServiceRunning = false
     private var shouldBeTorEnabled = false
@@ -64,6 +62,9 @@ class TorManager private constructor() {
     }
 
     fun initialize(context: Context) {
+        // Idempotent: the application starts this once per process, and the activity
+        // calls it again after a finish/reopen to recreate a cleaned-up scope.
+        if (scope?.isActive == true) return
         try {
             scope?.cancel()
             scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -76,13 +77,11 @@ class TorManager private constructor() {
                 dir.mkdirs()
             }
             dataDir = dir
-            torService = TorService()
 
             shouldBeTorEnabled = prefs.getBoolean(KEY_TOR_ENABLED, false)
 
-            if (shouldBeTorEnabled) {
-                startTor(context)
-            }
+            // Tor is started by a foreground component (MainActivity or the
+            // notification service), never by a background process start.
         } catch (e: Exception) {
             _torStatus.value = TorStatus.ERROR
             e.printStackTrace()
@@ -96,6 +95,7 @@ class TorManager private constructor() {
     fun startTor(context: Context) {
         try {
             shouldBeTorEnabled = true
+            saveTorState(true)
             _torStatus.value = TorStatus.CONNECTING
             connectionAttempts = 0
             lastFailureMessage = 0L
@@ -125,7 +125,6 @@ class TorManager private constructor() {
                                 socket.connect(torProxyAddress, 5000)
                                 socket.close()
                                 _torStatus.value = TorStatus.CONNECTED
-                                _proxyReady.value = true
                                 emitConnectionEvent(true)
                                 connectionAttempts = 0
                                 lastConnectionAttempt = System.currentTimeMillis()
@@ -163,7 +162,6 @@ class TorManager private constructor() {
             }
         } catch (e: Exception) {
             _torStatus.value = TorStatus.ERROR
-            _proxyReady.value = false
             scope?.launch { emitConnectionEvent(false) }
             e.printStackTrace()
         }
@@ -172,6 +170,7 @@ class TorManager private constructor() {
     fun stopTor(context: Context) {
         try {
             shouldBeTorEnabled = false
+            saveTorState(false)
             isInInitialConnection = true
 
             connectionJob?.cancel()
@@ -185,7 +184,6 @@ class TorManager private constructor() {
             stopForegroundService(context)
 
             _torStatus.value = TorStatus.DISCONNECTED
-            _proxyReady.value = false
         } catch (e: Exception) {
             _torStatus.value = TorStatus.ERROR
             e.printStackTrace()
@@ -243,7 +241,6 @@ class TorManager private constructor() {
                     }
                 } else if (torStatus.value != TorStatus.CONNECTED) {
                     _torStatus.value = TorStatus.CONNECTED
-                    _proxyReady.value = true
                     emitConnectionEvent(true)
                     connectionAttempts = 0
                     lastFailureMessage = 0L

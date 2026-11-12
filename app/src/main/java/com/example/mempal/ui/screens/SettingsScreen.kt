@@ -1,6 +1,9 @@
 package com.example.mempal.ui.screens
 
 import android.app.Activity
+import android.app.AlarmManager
+import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
@@ -43,7 +46,7 @@ import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.ExposedDropdownMenuAnchorType
 import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -89,6 +92,7 @@ import androidx.core.net.toUri
 import com.example.mempal.BuildConfig
 import com.example.mempal.R
 import com.example.mempal.api.NetworkClient
+import com.example.mempal.api.NetworkPolicy
 import com.example.mempal.repository.SettingsRepository
 import com.example.mempal.tor.TorManager
 import com.example.mempal.tor.TorStatus
@@ -98,6 +102,7 @@ import com.example.mempal.widget.WidgetUpdater
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 
 @Composable
 fun SettingsScreen(
@@ -144,7 +149,8 @@ fun SettingsScreen(
             visibleCards != settingsRepository.getVisibleCards()
 
     fun isValidUrl(url: String): Boolean {
-        return url.startsWith("http://") || url.startsWith("https://")
+        val httpUrl = url.trim().toHttpUrlOrNull() ?: return false
+        return httpUrl.host.isNotBlank() && NetworkPolicy.isCleartextAllowed(httpUrl)
     }
 
     fun handleSave() {
@@ -286,7 +292,7 @@ fun SettingsScreen(
                                 label = { Text(if (torEnabled) "Onion Address" else "Server Address", color = AppColors.DataGray) },
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .menuAnchor(MenuAnchorType.PrimaryEditable),
+                                    .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryEditable),
                                 colors = OutlinedTextFieldDefaults.colors(
                                     focusedBorderColor = AppColors.Orange,
                                     unfocusedBorderColor = AppColors.DataGray,
@@ -299,7 +305,7 @@ fun SettingsScreen(
                                         Text(
                                             text = if (isDefaultServer(customUrl))
                                                 "Use default server option instead"
-                                            else "URL must start with http:// or https://",
+                                            else "Use HTTPS, or HTTP only for .onion/local/private servers",
                                             color = MaterialTheme.colorScheme.error
                                         )
                                     }
@@ -436,8 +442,7 @@ fun SettingsScreen(
                         }
 
                         LaunchedEffect(customUrl, selectedOption, torEnabled, torStatus) {
-                            if (selectedOption == 1 && customUrl.isNotEmpty() &&
-                                (customUrl.startsWith("http://") || customUrl.startsWith("https://"))) {
+                            if (selectedOption == 1 && isValidUrl(customUrl)) {
                                 isTestingConnection = true
                                 testResult = null
 
@@ -464,7 +469,7 @@ fun SettingsScreen(
                                 // Retry logic for connection test
                                 // Always perform actual connection test - createTestClient is independent
                                 var retries = 0
-                                val maxRetries = 2
+                                val maxRetries = 1
                                 var success = false
                                 
                                 while (retries <= maxRetries && !success) {
@@ -522,7 +527,7 @@ fun SettingsScreen(
                     Switch(
                         checked = torEnabled,
                         onCheckedChange = { enabled ->
-                            if (enabled && customUrl.isNotEmpty() && (!customUrl.startsWith("http://") && !customUrl.startsWith("https://"))) {
+                            if (enabled && customUrl.isNotEmpty() && !isValidUrl(customUrl)) {
                                 showUrlError = true
                                 return@Switch
                             }
@@ -559,7 +564,7 @@ fun SettingsScreen(
                 ) {
                     Button(
                         onClick = {
-                            if (selectedOption == 1 && (customUrl.isEmpty() || (!customUrl.startsWith("http://") && !customUrl.startsWith("https://")))) {
+                            if (selectedOption == 1 && !isValidUrl(customUrl)) {
                                 showUrlError = true
                                 return@Button
                             }
@@ -730,7 +735,7 @@ fun SettingsScreen(
                         label = { Text("Update frequency") },
                         trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                         modifier = Modifier
-                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
                             .fillMaxWidth(),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = AppColors.Orange,
@@ -900,7 +905,7 @@ fun SettingsScreen(
                         },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
                             .padding(top = 16.dp),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = AppColors.Orange,
@@ -1049,11 +1054,30 @@ fun SettingsScreen(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
-                        intent?.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK)
-                        context.startActivity(intent)
-                        (context as? Activity)?.finishAffinity()
-                        Runtime.getRuntime().exit(0)
+                        val launchIntent = context.packageManager
+                            .getLaunchIntentForPackage(context.packageName)
+                            ?.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_NEW_TASK)
+
+                        if (launchIntent != null) {
+                            // Schedule the relaunch before the process exits; calling
+                            // startActivity then exiting immediately is racy.
+                            val pendingIntent = PendingIntent.getActivity(
+                                context,
+                                0,
+                                launchIntent,
+                                PendingIntent.FLAG_CANCEL_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                            )
+                            val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
+                            alarmManager.set(
+                                AlarmManager.RTC,
+                                System.currentTimeMillis() + 300L,
+                                pendingIntent
+                            )
+                            (context as? Activity)?.finishAffinity()
+                            Runtime.getRuntime().exit(0)
+                        } else {
+                            (context as? Activity)?.finishAffinity()
+                        }
                     }
                 ) {
                     Text("Restart Now")

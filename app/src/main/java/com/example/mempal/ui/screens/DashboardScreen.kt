@@ -218,6 +218,7 @@ private fun DashboardDisplay(
         if (!isMainRefreshing && isInitialized.value) {
             val currentTime = System.currentTimeMillis()
             if (currentTime - lastRefreshTime >= 5000) {
+                lastRefreshTime = currentTime
                 isRefreshing = true
                 val usePreciseFees = settingsRepository.settings.value.usePreciseFees
                 viewModel?.setUsePreciseFees(usePreciseFees)
@@ -243,8 +244,10 @@ private fun DashboardDisplay(
         1f
     }
     
-    // Animate the stretch scale smoothly to prevent pop/bounce when refresh completes
-    val stretchScale by animateFloatAsState(
+    // Animate the stretch scale smoothly to prevent pop/bounce when refresh completes.
+    // Read the animated value in the draw phase so the whole dashboard does not
+    // recompose on every animation frame.
+    val stretchScaleState = animateFloatAsState(
         targetValue = targetStretchScale,
         animationSpec = tween(durationMillis = 200),
         label = "stretch_scale"
@@ -258,10 +261,10 @@ private fun DashboardDisplay(
             .fillMaxSize()
             .padding(horizontal = 12.dp)
             .padding(bottom = 4.dp)
-            .graphicsLayer(
-                scaleY = stretchScale,
+            .graphicsLayer {
+                scaleY = stretchScaleState.value
                 transformOrigin = TransformOrigin(0.5f, 0f) // Pivot at top center so it stretches downward
-            ),
+            },
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         if (!statusMessage.isNullOrEmpty()) {
@@ -392,7 +395,7 @@ private fun DashboardDisplay(
                                                 style = MaterialTheme.typography.bodyMedium,
                                                 color = AppColors.DataGray.copy(alpha = 0.7f)
                                             )
-                                            viewModel?.difficultyAdjustment?.value?.let { adjustment ->
+                                            difficultyAdjustment?.let { adjustment ->
                                                 Row(
                                                     verticalAlignment = Alignment.CenterVertically,
                                                     horizontalArrangement = Arrangement.spacedBy(4.dp)

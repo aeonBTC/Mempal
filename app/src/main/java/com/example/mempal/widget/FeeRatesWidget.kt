@@ -5,12 +5,8 @@ import android.content.Context
 import android.util.Log
 import android.widget.RemoteViews
 import com.example.mempal.R
-import com.example.mempal.api.FeeRatesHelper
 import com.example.mempal.api.MempoolApi
 import com.example.mempal.repository.SettingsRepository
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import java.util.Locale
 
 class FeeRatesWidget : BaseMempalWidget() {
@@ -43,37 +39,23 @@ class FeeRatesWidget : BaseMempalWidget() {
         context: Context,
         api: MempoolApi,
         views: RemoteViews
-    ): Boolean = coroutineScope {
-        var success = false
-        
-        try {
+    ): Boolean {
+        return try {
             val settingsRepository = SettingsRepository.getInstance(context)
             val usePreciseFees = settingsRepository.settings.value.usePreciseFees
-            
-            val feeRatesDeferred = async(SupervisorJob() + coroutineContext) {
-                try {
-                    FeeRatesHelper.getFeeRatesWithFallback(api, usePreciseFees, settingsRepository)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Fee rates request failed: ${e.message}")
-                    null
-                }
-            }
-            
-            val response = feeRatesDeferred.await()
-            
-            if (response?.isSuccessful == true) {
-                response.body()?.let { feeRates ->
-                    views.setTextViewText(R.id.priority_fee, formatFeeRate(feeRates.fastestFee))
-                    views.setTextViewText(R.id.standard_fee, formatFeeRate(feeRates.halfHourFee))
-                    views.setTextViewText(R.id.economy_fee, formatFeeRate(feeRates.hourFee))
-                    success = true
-                }
-            }
+            val feeRates = WidgetDataProvider.fetchFeeRates(api, usePreciseFees, settingsRepository)
+                ?: return false
+
+            views.setTextViewText(R.id.priority_fee, formatFeeRate(feeRates.fastestFee))
+            views.setTextViewText(R.id.standard_fee, formatFeeRate(feeRates.halfHourFee))
+            views.setTextViewText(R.id.economy_fee, formatFeeRate(feeRates.hourFee))
+            true
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Error in fetchAndUpdateData: ${e.message}")
+            false
         }
-        
-        success
     }
     
     override fun setLoadingState(views: RemoteViews) {

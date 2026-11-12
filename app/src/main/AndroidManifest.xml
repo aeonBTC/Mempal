@@ -7,8 +7,10 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <queries>
         <intent>
@@ -48,18 +50,24 @@
         <service
             android:name=".service.NotificationService"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="dataSync|specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="bitcoin_network_monitoring" />
+        </service>
         <service
             android:name=".tor.TorForegroundService"
             android:enabled="true"
             android:exported="false"
-            android:foregroundServiceType="dataSync" />
+            android:foregroundServiceType="dataSync|specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="tor_connection_keepalive" />
+        </service>
         <receiver android:name=".widget.FeeRatesWidget"
-            android:exported="true">
+            android:exported="false">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="android.intent.action.SCREEN_ON" />
-                <action android:name="android.intent.action.POWER_CONNECTED" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
@@ -68,11 +76,9 @@
                 android:resource="@xml/fee_rates_widget_info" />
         </receiver>
         <receiver android:name=".widget.BlockHeightWidget"
-            android:exported="true">
+            android:exported="false">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="android.intent.action.SCREEN_ON" />
-                <action android:name="android.intent.action.POWER_CONNECTED" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
@@ -81,11 +87,9 @@
                 android:resource="@xml/block_height_widget_info" />
         </receiver>
         <receiver android:name=".widget.MempoolSizeWidget"
-            android:exported="true">
+            android:exported="false">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="android.intent.action.SCREEN_ON" />
-                <action android:name="android.intent.action.POWER_CONNECTED" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
@@ -94,11 +98,9 @@
                 android:resource="@xml/mempool_size_widget_info" />
         </receiver>
         <receiver android:name=".widget.CombinedStatsWidget"
-            android:exported="true">
+            android:exported="false">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
-                <action android:name="android.intent.action.SCREEN_ON" />
-                <action android:name="android.intent.action.POWER_CONNECTED" />
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
@@ -107,10 +109,21 @@
                 android:resource="@xml/combined_stats_widget_info" />
         </receiver>
         
+        <!-- Restore notification monitoring after reboot/update -->
+        <receiver
+            android:name=".service.NotificationBootReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+
         <!-- Add bootup receiver for better widget handling -->
         <receiver 
             android:name=".widget.WidgetBootupReceiver"
-            android:exported="true">
+            android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
@@ -121,9 +134,8 @@
         <!-- Network connectivity monitor -->
         <receiver
             android:name=".widget.NetworkConnectivityReceiver"
-            android:exported="true">
+            android:exported="false">
             <intent-filter>
-                <action android:name="android.net.conn.CONNECTIVITY_CHANGE" />
                 <action android:name="android.os.action.POWER_SAVE_MODE_CHANGED" />
             </intent-filter>
         </receiver>

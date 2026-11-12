@@ -14,6 +14,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import okhttp3.OkHttpClient
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
 import java.lang.ref.WeakReference
@@ -33,7 +34,9 @@ object NetworkClient {
     private val _isInitialized = MutableStateFlow(false)
     val isInitialized: StateFlow<Boolean> = _isInitialized
     private var coroutineScope: CoroutineScope? = null
+    private var torStatusCollectorJob: Job? = null
     private var connectivityManager: ConnectivityManager? = null
+    private var networkCallbackRegistered = false
     private val _isNetworkAvailable = MutableStateFlow(false)
     val isNetworkAvailable: StateFlow<Boolean> = _isNetworkAvailable
     private var lastInitAttempt = 0L
@@ -47,9 +50,6 @@ object NetworkClient {
     // Cached fallback clients for mempool.space (reused instead of creating new ones each time)
     private var cachedClearnetFallbackApi: MempoolApi? = null
     private var cachedOnionFallbackApi: MempoolApi? = null
-    
-    // Comprehensive cache for all test clients keyed by (baseUrl, useTor) to avoid creating duplicates
-    private val testClientCache = mutableMapOf<Pair<String, Boolean>, MempoolApi>()
     
     val mempoolApi: MempoolApi
         get() {
@@ -69,39 +69,24 @@ object NetworkClient {
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             super.onAvailable(network)
-            coroutineScope?.launch {
-                try {
-                    _isNetworkAvailable.value = true
-                    
-                    // Only set up if not already initialized with a valid API
-                    // setupRetrofit will skip if configuration is the same, so it's safe to call
-                    val torManager = TorManager.getInstance()
-                    if (torManager.isTorEnabled()) {
-                        if (torManager.torStatus.value == TorStatus.CONNECTED) {
-                            setupRetrofit(true)
-                            _isInitialized.value = _mempoolApi != null
-                        }
-                    } else {
-                        setupRetrofit(false)
-                        _isInitialized.value = _mempoolApi != null
-                    }
-                } catch (e: Exception) {
-                    println("Error in network callback: ${e.message}")
-                    // Don't set to false if we already have a working API
-                    if (_mempoolApi == null) {
-                        _isInitialized.value = false
-                    }
-                }
-            }
+            setupForCurrentNetwork()
         }
 
         override fun onLost(network: Network) {
             super.onLost(network)
-            _isNetworkAvailable.value = false
-            _isInitialized.value = false
-            _mempoolApi = null
-            lastSetupUseProxy = null
-            lastSetupBaseUrl = null
+            // Only treat this as a full outage if no other usable network remains.
+            val cm = connectivityManager
+            val active = cm?.activeNetwork
+            val caps = active?.let { cm.getNetworkCapabilities(it) }
+            val stillAvailable = active != null &&
+                caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+            _isNetworkAvailable.value = stillAvailable
+            if (!stillAvailable) {
+                _isInitialized.value = false
+                _mempoolApi = null
+                lastSetupUseProxy = null
+                lastSetupBaseUrl = null
+            }
         }
     }
 
@@ -142,19 +127,26 @@ object NetworkClient {
         lastInitAttempt = System.currentTimeMillis()
         println("Initializing NetworkClient...")
         contextRef = WeakReference(context.applicationContext)
-        coroutineScope?.cancel() // Cancel any existing scope
-        val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
-            println("NetworkClient coroutine exception: ${throwable.message}")
-            _isInitialized.value = false
+
+        // Reuse a live scope. Replacing it cancels pending setup work that may
+        // have been queued by onAvailable, which can leave the client stuck.
+        if (coroutineScope?.isActive != true) {
+            val exceptionHandler = CoroutineExceptionHandler { _, throwable ->
+                println("NetworkClient coroutine exception: ${throwable.message}")
+                _isInitialized.value = false
+            }
+            coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main + exceptionHandler)
         }
-        coroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main + exceptionHandler)
         
         // Setup connectivity monitoring
         connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val networkRequest = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .build()
-        connectivityManager?.registerNetworkCallback(networkRequest, networkCallback)
+        if (!networkCallbackRegistered) {
+            connectivityManager?.registerNetworkCallback(networkRequest, networkCallback)
+            networkCallbackRegistered = true
+        }
         
         // Check initial network state
         _isNetworkAvailable.value = isNetworkCurrentlyAvailable()
@@ -164,58 +156,91 @@ object NetworkClient {
         val currentApiUrl = settingsRepository.getApiUrl()
         val torManager = TorManager.getInstance()
         
-        if (currentApiUrl.contains(".onion")) {
-            if (!torManager.isTorEnabled()) {
-                println("Onion address detected, enabling Tor")
-                torManager.startTor(context)
-            }
-        } else if (torManager.isTorEnabled()) {
+        if (!currentApiUrl.contains(".onion") && torManager.isTorEnabled()) {
             println("Non-onion address detected, disabling Tor")
             torManager.stopTor(context)
         }
+        // Onion URLs are started by MainActivity/NotificationService so a
+        // background process start never attempts to start TorService.
 
-        coroutineScope?.launch {
-            try {
-                torManager.torStatus.collect { status ->
-                    println("Tor status changed: $status")
-                    val isTorEnabled = torManager.isTorEnabled()
-                    
-                    // Only process Tor status changes if Tor is actually enabled
-                    // For non-Tor servers, ignore Tor status changes completely
-                    if (!isTorEnabled) {
-                        return@collect
-                    }
-                    
-                    if (status == TorStatus.CONNECTED || status == TorStatus.DISCONNECTED) {
-                        if (isNetworkCurrentlyAvailable()) {
-                            println("Setting up Retrofit with useProxy=${status == TorStatus.CONNECTED}")
-                            try {
-                                setupRetrofit(status == TorStatus.CONNECTED)
-                                _isInitialized.value = _mempoolApi != null
-                            } catch (e: Exception) {
-                                println("Error setting up Retrofit: ${e.message}")
-                                // Don't set to false if we already have a working API
+        if (torStatusCollectorJob?.isActive != true) {
+            torStatusCollectorJob = coroutineScope?.launch {
+                try {
+                    torManager.torStatus.collect { status ->
+                        println("Tor status changed: $status")
+                        val isTorEnabled = torManager.isTorEnabled()
+                        
+                        // Only process Tor status changes if Tor is actually enabled
+                        // For non-Tor servers, ignore Tor status changes completely
+                        if (!isTorEnabled) {
+                            return@collect
+                        }
+                        
+                        if (status == TorStatus.CONNECTED || status == TorStatus.DISCONNECTED) {
+                            if (isNetworkCurrentlyAvailable()) {
+                                println("Setting up Retrofit with useProxy=${status == TorStatus.CONNECTED}")
+                                try {
+                                    setupRetrofit(status == TorStatus.CONNECTED)
+                                    _isInitialized.value = _mempoolApi != null
+                                } catch (e: Exception) {
+                                    println("Error setting up Retrofit: ${e.message}")
+                                    // Don't set to false if we already have a working API
+                                    if (_mempoolApi == null) {
+                                        _isInitialized.value = false
+                                    }
+                                }
+                            } else {
+                                // Only set to false if we don't have a working API
                                 if (_mempoolApi == null) {
                                     _isInitialized.value = false
                                 }
                             }
                         } else {
+                            // Tor is enabled but in CONNECTING or ERROR state
                             // Only set to false if we don't have a working API
                             if (_mempoolApi == null) {
                                 _isInitialized.value = false
                             }
                         }
-                    } else {
-                        // Tor is enabled but in CONNECTING or ERROR state
-                        // Only set to false if we don't have a working API
-                        if (_mempoolApi == null) {
-                            _isInitialized.value = false
-                        }
+                    }
+                } catch (e: Exception) {
+                    println("Error in Tor status collector: ${e.message}")
+                    // Don't set to false if we already have a working API
+                    if (_mempoolApi == null) {
+                        _isInitialized.value = false
                     }
                 }
+            }
+        }
+
+        // Do not rely solely on onAvailable: it may have fired while the old
+        // coroutine scope was being replaced. Setting up now is idempotent
+        // because setupRetrofit skips an unchanged configuration.
+        if (isNetworkCurrentlyAvailable()) {
+            setupForCurrentNetwork()
+        }
+    }
+
+    /**
+     * Sets up Retrofit for the currently available network. Safe to call
+     * repeatedly; [setupRetrofit] skips an unchanged configuration.
+     */
+    private fun setupForCurrentNetwork() {
+        coroutineScope?.launch {
+            try {
+                _isNetworkAvailable.value = true
+                val torManager = TorManager.getInstance()
+                if (torManager.isTorEnabled()) {
+                    if (torManager.torStatus.value == TorStatus.CONNECTED) {
+                        setupRetrofit(true)
+                        _isInitialized.value = _mempoolApi != null
+                    }
+                } else {
+                    setupRetrofit(false)
+                    _isInitialized.value = _mempoolApi != null
+                }
             } catch (e: Exception) {
-                println("Error in Tor status collector: ${e.message}")
-                // Don't set to false if we already have a working API
+                println("Error in network callback: ${e.message}")
                 if (_mempoolApi == null) {
                     _isInitialized.value = false
                 }
@@ -231,8 +256,17 @@ object NetworkClient {
     }
 
     fun cleanup() {
-        connectivityManager?.unregisterNetworkCallback(networkCallback)
+        if (networkCallbackRegistered) {
+            try {
+                connectivityManager?.unregisterNetworkCallback(networkCallback)
+            } catch (_: Exception) {
+                // Already unregistered
+            }
+            networkCallbackRegistered = false
+        }
         connectivityManager = null
+        torStatusCollectorJob?.cancel()
+        torStatusCollectorJob = null
         coroutineScope?.cancel()
         coroutineScope = null
         contextRef = null
@@ -241,7 +275,6 @@ object NetworkClient {
         // Clear cached fallback clients
         cachedClearnetFallbackApi = null
         cachedOnionFallbackApi = null
-        testClientCache.clear()
         // Reset configuration tracking
         lastSetupUseProxy = null
         lastSetupBaseUrl = null
@@ -254,6 +287,16 @@ object NetworkClient {
             val context = contextRef?.get() ?: throw IllegalStateException("Context not available")
             val baseUrl = SettingsRepository.getInstance(context).getApiUrl().let { url ->
                 if (!url.endsWith("/")) "$url/" else url
+            }
+
+            // A malformed URL would otherwise make Retrofit throw and leave the app
+            // stuck waiting for initialization.
+            val httpUrl = baseUrl.toHttpUrlOrNull()
+                ?: throw IllegalArgumentException("Invalid API URL: $baseUrl")
+            if (!NetworkPolicy.isCleartextAllowed(httpUrl)) {
+                throw IllegalArgumentException(
+                    "Plain HTTP is only allowed for .onion, localhost, or private networks"
+                )
             }
 
             // Skip if already set up with the same configuration
@@ -301,6 +344,10 @@ object NetworkClient {
                         if (response.isSuccessful) {
                             return@addInterceptor response
                         }
+                        // Never retry client errors (including 429); let the caller back off.
+                        if (response.code in 400..499) {
+                            return@addInterceptor response
+                        }
                         attempt++
                     } catch (e: java.net.SocketTimeoutException) {
                         lastException = e
@@ -316,6 +363,9 @@ object NetworkClient {
                 // Return last response if we have one, otherwise throw the last exception
                 response ?: throw (lastException ?: java.io.IOException("Failed to connect after $maxAttempts attempts"))
             }
+
+            // Keep a host-level backoff when the server asks us to slow down.
+            clientBuilder.addInterceptor(RateLimitInterceptor())
 
             if (useProxy && isOnion) {
                 println("Setting up Tor proxy")
@@ -343,9 +393,7 @@ object NetworkClient {
                 )
             }
 
-            val gson = GsonBuilder()
-                .setLenient()
-                .create()
+            val gson = GsonBuilder().create()
 
             retrofit = Retrofit.Builder()
                 .baseUrl(baseUrl)
@@ -377,26 +425,26 @@ object NetworkClient {
      */
     fun createTestClient(baseUrl: String, useTor: Boolean = false): MempoolApi {
         val formattedUrl = if (!baseUrl.endsWith("/")) "$baseUrl/" else baseUrl
-        val cacheKey = Pair(formattedUrl, useTor)
+
+        val parsedUrl = formattedUrl.toHttpUrlOrNull()
+            ?: throw IllegalArgumentException("Invalid API URL: $baseUrl")
+        if (!NetworkPolicy.isCleartextAllowed(parsedUrl)) {
+            throw IllegalArgumentException(
+                "Plain HTTP is only allowed for .onion, localhost, or private networks"
+            )
+        }
         
-        // Return cached client if available
-        testClientCache[cacheKey]?.let { return it }
-        
-        // Also check legacy mempool.space cache for backward compatibility
+        // Only the mempool.space fallback clients are cached. Arbitrary server
+        // test clients are ephemeral: caching every URL typed in Settings would
+        // grow without bound (each owns an OkHttp dispatcher/connection pool).
         val isMempoolSpaceClearnet = formattedUrl == MempoolApi.BASE_URL && !useTor
         val isMempoolSpaceOnion = formattedUrl == MempoolApi.ONION_BASE_URL && useTor
         
         if (isMempoolSpaceClearnet) {
-            cachedClearnetFallbackApi?.let { 
-                testClientCache[cacheKey] = it
-                return it 
-            }
+            cachedClearnetFallbackApi?.let { return it }
         }
         if (isMempoolSpaceOnion) {
-            cachedOnionFallbackApi?.let { 
-                testClientCache[cacheKey] = it
-                return it 
-            }
+            cachedOnionFallbackApi?.let { return it }
         }
         
         // Build new client
@@ -410,6 +458,9 @@ object NetworkClient {
         
         // Don't add logging for test clients to avoid body stream issues
         // Test clients are temporary and don't need logging
+
+        // Respect rate limiting on fallback/custom servers too.
+        clientBuilder.addInterceptor(RateLimitInterceptor())
 
         if (useTor && isOnion) {
             clientBuilder.proxy(java.net.Proxy(
@@ -426,10 +477,7 @@ object NetworkClient {
 
         val api = testRetrofit.create(MempoolApi::class.java)
         
-        // Cache the client for future use
-        testClientCache[cacheKey] = api
-        
-        // Also update legacy mempool.space cache for backward compatibility
+        // Cache only the default mempool.space fallback clients.
         if (isMempoolSpaceClearnet) {
             cachedClearnetFallbackApi = api
         } else if (isMempoolSpaceOnion) {

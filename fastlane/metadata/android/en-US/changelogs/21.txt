@@ -1,0 +1,3 @@
+- Added therhold for transaction confirmation alerts.
+- Performance optimizations and code improvements.
+- Various bug fixes and stability improvements.

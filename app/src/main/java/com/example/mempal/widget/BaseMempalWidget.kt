@@ -9,6 +9,7 @@ import android.content.Intent
 import android.util.Log
 import android.widget.RemoteViews
 import com.example.mempal.api.MempoolApi
+import com.example.mempal.api.RateLimitGate
 import com.example.mempal.api.WidgetNetworkClient
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -221,11 +222,26 @@ abstract class BaseMempalWidget : AppWidgetProvider() {
                     setErrorState(views)
                     appWidgetManager.updateAppWidget(widgetIds[0], views)
                 }
-                
+                WidgetUpdateTracker.completeOne()
                 return
             }
             
             // Network is available, proceed with update
+            if (RateLimitGate.isAnyBlocked()) {
+                Log.d(tag, "Server rate limit backoff active, skipping manual widget refresh")
+                WidgetUtils.resetTapState()
+                val appWidgetManager = AppWidgetManager.getInstance(context)
+                val thisWidget = ComponentName(context, this::class.java)
+                val widgetIds = appWidgetManager.getAppWidgetIds(thisWidget)
+                if (widgetIds.isNotEmpty()) {
+                    val views = RemoteViews(context.packageName, layoutResId)
+                    setErrorState(views)
+                    appWidgetManager.updateAppWidget(widgetIds[0], views)
+                }
+                WidgetUpdateTracker.completeOne()
+                return
+            }
+
             val appWidgetManager = AppWidgetManager.getInstance(context)
             val thisWidget = ComponentName(context, this::class.java)
             onUpdate(context, appWidgetManager, appWidgetManager.getAppWidgetIds(thisWidget))
@@ -302,6 +318,9 @@ abstract class BaseMempalWidget : AppWidgetProvider() {
                 Log.d(tag, "Error state set for widget ID: $appWidgetId due to exception")
             } finally {
                 removeJob(this@BaseMempalWidget::class.java, appWidgetId)
+                // Give the worker a chance to end its run now that this instance
+                // has finished (or failed) its network work.
+                WidgetUpdateTracker.completeOne()
                 // Note: Don't reset tap state here - it would break double-tap detection
                 // The tap state auto-resets after successful double-tap or 30s timeout
             }

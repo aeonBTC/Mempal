@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.util.Log
+import com.example.mempal.BuildConfig
 import com.example.mempal.repository.SettingsRepository
 import com.google.gson.GsonBuilder
 import okhttp3.OkHttpClient
@@ -115,7 +116,14 @@ object WidgetNetworkClient {
     private fun hasUrlChanged(context: Context): Boolean {
         val settingsRepository = SettingsRepository.getInstance(context)
         val currentUrl = settingsRepository.getApiUrl()
-        return retrofit?.baseUrl()?.toString()?.contains(currentUrl) != true
+        val resolved = if (currentUrl.contains(".onion")) DEFAULT_API_URL else currentUrl
+        val formatted = if (!resolved.endsWith("/")) "$resolved/" else resolved
+        val safeUrl = if (NetworkPolicy.isCleartextAllowed(formatted)) {
+            formatted
+        } else {
+            "$DEFAULT_API_URL/"
+        }
+        return retrofit?.baseUrl()?.toString() != safeUrl
     }
 
     private fun createMempoolApi(context: Context): MempoolApi {
@@ -123,7 +131,7 @@ object WidgetNetworkClient {
         val userApiUrl = settingsRepository.getApiUrl()
 
         // If the user's custom server is a .onion address, use the default mempool.space
-        val baseUrl = if (userApiUrl.contains(".onion")) {
+        val configuredUrl = if (userApiUrl.contains(".onion")) {
             DEFAULT_API_URL
         } else {
             userApiUrl
@@ -131,12 +139,25 @@ object WidgetNetworkClient {
             if (!url.endsWith("/")) "$url/" else url
         }
 
+        // Never send cleartext to a public host; widgets fall back to the default
+        // HTTPS server if the configured URL is not policy-compliant.
+        val baseUrl = if (NetworkPolicy.isCleartextAllowed(configuredUrl)) {
+            configuredUrl
+        } else {
+            "$DEFAULT_API_URL/"
+        }
+
         val clientBuilder = OkHttpClient.Builder()
-            .addInterceptor(safeLoggingInterceptor)
             .connectTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .readTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .writeTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .retryOnConnectionFailure(true)
+
+        if (BuildConfig.DEBUG) {
+            clientBuilder.addInterceptor(safeLoggingInterceptor)
+        }
+
+        clientBuilder
                 .addInterceptor { chain ->
                 // Check network availability before proceeding
                 if (!isNetworkAvailable) {
@@ -200,9 +221,10 @@ object WidgetNetworkClient {
                 }
             }
 
-        val gson = GsonBuilder()
-            .setLenient()
-            .create()
+        // Respect server rate limiting (fails fast while backing off).
+        clientBuilder.addInterceptor(RateLimitInterceptor())
+
+        val gson = GsonBuilder().create()
 
         retrofit = Retrofit.Builder()
             .baseUrl(baseUrl)

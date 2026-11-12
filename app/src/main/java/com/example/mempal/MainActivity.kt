@@ -7,7 +7,9 @@ import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.Image
@@ -70,8 +72,9 @@ import androidx.compose.ui.window.Popup
 import androidx.core.content.ContextCompat
 import androidx.core.net.toUri
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
-import androidx.core.view.WindowCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
 import com.example.mempal.api.NetworkClient
 import com.example.mempal.repository.SettingsRepository
 import com.example.mempal.service.NotificationService
@@ -94,6 +97,8 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     private val viewModel: MainViewModel by viewModels()
     private lateinit var settingsRepository: SettingsRepository
+    @Volatile
+    private var splashTimeoutElapsed = false
 
     val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -111,12 +116,7 @@ class MainActivity : ComponentActivity() {
                 }
                 
                 // Start or restart the service to ensure notification is shown
-                val serviceIntent = Intent(this, NotificationService::class.java)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    startForegroundService(serviceIntent)
-                } else {
-                    startService(serviceIntent)
-                }
+                NotificationService.start(this)
             }
         } else {
             // If permission was denied, disable the service since it can't run without permission
@@ -152,7 +152,8 @@ class MainActivity : ComponentActivity() {
         if (settings.txConfirmationEnabled) {
             if (settings.transactionId.isEmpty() || 
                 settings.transactionId.length < 64 || 
-                settings.txConfirmationFrequency <= 0) {
+                settings.txConfirmationFrequency <= 0 ||
+                settings.targetConfirmations <= 0) {
                 return "Please fill out required notification fields"
             }
         }
@@ -183,27 +184,52 @@ class MainActivity : ComponentActivity() {
 
     private fun startNotificationServiceIfEnabled() {
         val settings = settingsRepository.settings.value
-        if (settings.isServiceEnabled) {
-            val serviceIntent = Intent(this, NotificationService::class.java)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                startForegroundService(serviceIntent)
-            } else {
-                startService(serviceIntent)
-            }
+        if (settings.isServiceEnabled && !NotificationService.isServiceRunning()) {
+            NotificationService.start(this)
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         val splashScreen = installSplashScreen()
         splashScreen.setKeepOnScreenCondition {
-            !NetworkClient.isInitialized.value
+            // Never wait indefinitely for the network or Tor. The dashboard has its
+            // own connecting state and cached/offline UI.
+            !splashTimeoutElapsed && !NetworkClient.isInitialized.value
         }
 
         super.onCreate(savedInstanceState)
-        WindowCompat.setDecorFitsSystemWindows(window, false)
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        )
 
+        // Release the splash after a short grace period even if the network is
+        // unavailable or Tor is still bootstrapping. Invalidate each frame so the
+        // splash screen re-checks its condition.
+        lifecycleScope.launch {
+            repeat(30) {
+                window.decorView.postInvalidateOnAnimation()
+                if (splashTimeoutElapsed || NetworkClient.isInitialized.value) return@launch
+                delay(100)
+            }
+            splashTimeoutElapsed = true
+            window.decorView.postInvalidateOnAnimation()
+        }
+
+        TorManager.getInstance().initialize(applicationContext)
         NetworkClient.initialize(applicationContext)
         settingsRepository = SettingsRepository.getInstance(applicationContext)
+
+        // Start Tor from the foreground only. Background process starts (widget
+        // updates, boot) must not attempt to start TorService.
+        val torManager = TorManager.getInstance()
+        val needsTor = torManager.isTorEnabled() || settingsRepository.getApiUrl().contains(".onion")
+        if (needsTor &&
+            torManager.torStatus.value != TorStatus.CONNECTED &&
+            torManager.torStatus.value != TorStatus.CONNECTING
+        ) {
+            torManager.startTor(applicationContext)
+        }
         
         viewModel.setContext(applicationContext)
 
@@ -223,15 +249,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Settings changes - manage notification service
+            // Settings changes - manage notification service. Only react while the
+            // activity is started, so we never try to start an FGS from the background.
             launch {
-                settingsRepository.settings.collect { settings ->
-                    if (settings.isServiceEnabled) {
-                        val serviceIntent = Intent(this@MainActivity, NotificationService::class.java)
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                            startForegroundService(serviceIntent)
-                        } else {
-                            startService(serviceIntent)
+                repeatOnLifecycle(Lifecycle.State.STARTED) {
+                    settingsRepository.settings.collect { settings ->
+                        if (settings.isServiceEnabled && !NotificationService.isServiceRunning()) {
+                            NotificationService.start(applicationContext)
                         }
                     }
                 }
@@ -245,7 +269,7 @@ class MainActivity : ComponentActivity() {
                 ) { isInitialized, isAvailable -> 
                     isInitialized && isAvailable 
                 }.collect { canRefresh ->
-                    if (canRefresh && viewModel.shouldAutoRefresh()) {
+                    if (canRefresh && viewModel.shouldAutoRefresh() && viewModel.selectedTab.value == 0) {
                         val usePreciseFees = settingsRepository.settings.value.usePreciseFees
                         viewModel.setUsePreciseFees(usePreciseFees)
                         viewModel.refreshData(usePreciseFees, isManualRefresh = false)
@@ -259,6 +283,24 @@ class MainActivity : ComponentActivity() {
                 viewModel.uiState.collect { uiState ->
                     if (uiState is DashboardUiState.Success && !uiState.isCache) {
                         WidgetUpdater.requestImmediateUpdate(applicationContext)
+                    }
+                }
+            }
+
+            // Dashboard polling only runs while the activity is resumed. Backgrounding
+            // the app stops the loop instead of continuing to hit the server.
+            launch {
+                repeatOnLifecycle(Lifecycle.State.RESUMED) {
+                    while (true) {
+                        delay(300_000) // 5 minutes
+                        if (NetworkClient.isInitialized.value &&
+                            viewModel.selectedTab.value == 0 &&
+                            viewModel.shouldAutoRefresh()
+                        ) {
+                            val usePreciseFees = settingsRepository.settings.value.usePreciseFees
+                            viewModel.setUsePreciseFees(usePreciseFees)
+                            viewModel.refreshData(usePreciseFees, isManualRefresh = false)
+                        }
                     }
                 }
             }
@@ -294,7 +336,8 @@ class MainActivity : ComponentActivity() {
             lifecycleScope.launch {
                 delay(500)
                 // Check conditions after delay - ViewModel init may have already refreshed
-                if (!viewModel.hasInitialData || viewModel.shouldAutoRefresh()) {
+                if (viewModel.selectedTab.value == 0 &&
+                    (!viewModel.hasInitialData || viewModel.shouldAutoRefresh())) {
                     val usePreciseFees = settingsRepository.settings.value.usePreciseFees
                     viewModel.setUsePreciseFees(usePreciseFees)
                     viewModel.refreshData(usePreciseFees, isManualRefresh = false)
@@ -307,7 +350,6 @@ class MainActivity : ComponentActivity() {
         super.onDestroy()
         if (isFinishing) {
             NetworkClient.cleanup()
-            SettingsRepository.cleanup()
             TorManager.getInstance().cleanup()
             requestPermissionLauncher.unregister()
         }
@@ -324,7 +366,6 @@ class MainActivity : ComponentActivity() {
 private fun MainScreen(viewModel: MainViewModel) {
     var selectedTab by remember { mutableIntStateOf(0) }
     val uiState by viewModel.uiState.collectAsState()
-    val isInitialized by NetworkClient.isInitialized.collectAsState()
     val context = LocalContext.current
     val settingsRepository = remember { SettingsRepository.getInstance(context) }
     var showWelcomeDialog by remember { mutableStateOf(settingsRepository.isFirstLaunch()) }
@@ -349,20 +390,6 @@ private fun MainScreen(viewModel: MainViewModel) {
 
     LaunchedEffect(selectedTab) {
         viewModel.onTabSelected(selectedTab)
-    }
-
-    // Auto-refresh every 5 minutes when on dashboard tab
-    LaunchedEffect(selectedTab, isInitialized) {
-        if (selectedTab == 0 && isInitialized) {
-            while (true) {
-                delay(300000) // 5 minutes
-                if (selectedTab == 0 && viewModel.shouldAutoRefresh()) {
-                    val usePreciseFees = settingsRepository.settings.value.usePreciseFees
-                    viewModel.setUsePreciseFees(usePreciseFees)
-                    viewModel.refreshData(usePreciseFees, isManualRefresh = false)
-                }
-            }
-        }
     }
 
     if (showWelcomeDialog) {
@@ -470,10 +497,12 @@ private fun MainScreen(viewModel: MainViewModel) {
                         PullToRefreshBox(
                             isRefreshing = isRefreshing,
                             onRefresh = { 
-                                scope.launch {
-                                    val usePreciseFees = settingsRepository.settings.value.usePreciseFees
-                                    viewModel.setUsePreciseFees(usePreciseFees)
-                                    viewModel.refreshData(usePreciseFees, isManualRefresh = true)
+                                if (!isRefreshing) {
+                                    scope.launch {
+                                        val usePreciseFees = settingsRepository.settings.value.usePreciseFees
+                                        viewModel.setUsePreciseFees(usePreciseFees)
+                                        viewModel.refreshData(usePreciseFees, isManualRefresh = true)
+                                    }
                                 }
                             },
                             modifier = Modifier.fillMaxSize(),
@@ -497,49 +526,35 @@ private fun MainScreen(viewModel: MainViewModel) {
                             }
                         }
                         
-                        if (isRefreshing) {
+                        if (showInitialText) {
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
-                                    .then(
-                                        if (showInitialText) {
-                                            Modifier.background(Color.Black.copy(alpha = 0.3f))
-                                        } else {
-                                            Modifier
-                                        }
-                                    ),
+                                    .background(Color.Black.copy(alpha = 0.3f)),
                                 contentAlignment = Alignment.Center
                             ) {
-                                if (showInitialText) {
-                                    Card(
-                                        colors = CardDefaults.cardColors(
-                                            containerColor = AppColors.DarkerNavy
-                                        ),
-                                        modifier = Modifier.padding(24.dp)
+                                Card(
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = AppColors.DarkerNavy
+                                    ),
+                                    modifier = Modifier.padding(24.dp)
+                                ) {
+                                    Column(
+                                        modifier = Modifier.padding(24.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        verticalArrangement = Arrangement.spacedBy(12.dp)
                                     ) {
-                                        Column(
-                                            modifier = Modifier.padding(24.dp),
-                                            horizontalAlignment = Alignment.CenterHorizontally,
-                                            verticalArrangement = Arrangement.spacedBy(12.dp)
-                                        ) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(48.dp),
-                                                color = AppColors.Orange,
-                                                strokeWidth = 4.dp
-                                            )
-                                            Text(
-                                                text = "Fetching data...",
-                                                style = MaterialTheme.typography.bodyMedium,
-                                                color = AppColors.DataGray
-                                            )
-                                        }
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(48.dp),
+                                            color = AppColors.Orange,
+                                            strokeWidth = 4.dp
+                                        )
+                                        Text(
+                                            text = "Fetching data...",
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            color = AppColors.DataGray
+                                        )
                                     }
-                                } else {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(48.dp),
-                                        color = AppColors.Orange,
-                                        strokeWidth = 4.dp
-                                    )
                                 }
                             }
                         }

@@ -6,12 +6,14 @@ import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.mempal.api.DifficultyAdjustment
+import com.example.mempal.api.BlockDataProvider
 import com.example.mempal.api.FeeRates
 import com.example.mempal.api.FeeRatesHelper
 import com.example.mempal.api.HashrateInfo
 import com.example.mempal.api.MempoolApi
 import com.example.mempal.api.MempoolInfo
 import com.example.mempal.api.NetworkClient
+import com.example.mempal.api.RateLimitGate
 import com.example.mempal.cache.DashboardCache
 import com.example.mempal.repository.SettingsRepository
 import com.example.mempal.tor.TorManager
@@ -57,6 +59,11 @@ class MainViewModel : ViewModel() {
     private val _isMainRefreshing = MutableStateFlow(false)
     val isMainRefreshing: StateFlow<Boolean> = _isMainRefreshing
 
+    // Mirrors the selected bottom-navigation tab so lifecycle-aware polling can
+    // avoid refreshing while another tab is visible.
+    private val _selectedTab = MutableStateFlow(0)
+    val selectedTab: StateFlow<Int> = _selectedTab
+
     private val _uiState = MutableStateFlow<DashboardUiState>(DashboardUiState.Loading)
     val uiState: StateFlow<DashboardUiState> = _uiState
 
@@ -68,6 +75,11 @@ class MainViewModel : ViewModel() {
 
     private var serverNeedsFallback = false
     private var usePreciseFees = false
+    // Height for which hashrate/difficulty were last fetched. These only change per block.
+    private var lastBlockDerivedHeight: Int? = null
+    // The histogram fallback lives on a different server; don't retry it on every refresh.
+    private var lastHistogramFallbackTime = 0L
+    private var lastFallbackHistogram: List<List<Double>> = emptyList()
     // Use WeakReference to avoid memory leaks - allows GC to reclaim context if ViewModel outlives Activity
     private var contextRef: WeakReference<Context>? = null
     private var lastAutoRefreshTime: Long = 0L
@@ -202,6 +214,7 @@ class MainViewModel : ViewModel() {
 
     // Function to handle tab changes
     fun onTabSelected(tab: Int) {
+        _selectedTab.value = tab
         when (tab) {
             0 -> {
                 // Only auto-refresh if dashboard not loaded OR if 1 minute has elapsed since last auto-refresh
@@ -256,6 +269,9 @@ class MainViewModel : ViewModel() {
 
     // Helper function to fetch histogram fallback data
     private fun fetchHistogramFallback(mempoolInfo: MempoolInfo) {
+        val now = System.currentTimeMillis()
+        if (now - lastHistogramFallbackTime < 5 * 60_000L) return
+        lastHistogramFallbackTime = now
         viewModelScope.launch {
             try {
                 val torManager = TorManager.getInstance()
@@ -276,6 +292,7 @@ class MainViewModel : ViewModel() {
                     fallbackClient.getMempoolInfo().processBody(
                         onSuccess = { fallbackInfo ->
                             if (!fallbackInfo.needsHistogramFallback()) {
+                                lastFallbackHistogram = fallbackInfo.feeHistogram
                                 _mempoolInfo.value = mempoolInfo.copy(
                                     feeHistogram = fallbackInfo.feeHistogram,
                                     isUsingFallbackHistogram = true
@@ -348,10 +365,21 @@ class MainViewModel : ViewModel() {
         // Set refreshing flag immediately (before coroutine launch) to block concurrent calls
         _isMainRefreshing.value = true
         
-        // Update last auto-refresh time only if this is an auto-refresh
-        if (!isManualRefresh) {
-            lastAutoRefreshTime = System.currentTimeMillis()
+        // Any refresh (manual or automatic) resets the auto-refresh clock so a
+        // manual pull does not immediately trigger another request.
+        lastAutoRefreshTime = System.currentTimeMillis()
+
+        // If the server asked us to back off, do not send any requests.
+        if (RateLimitGate.isAnyBlocked()) {
+            val waitSeconds = ((RateLimitGate.maxRemainingMs() + 999) / 1000).coerceAtLeast(1)
+            _uiState.value = DashboardUiState.Error(
+                message = "Rate limited by server. Retrying in ${waitSeconds}s.",
+                isReconnecting = true
+            )
+            _isMainRefreshing.value = false
+            return
         }
+
         viewModelScope.launch {
             _uiState.value = DashboardUiState.Loading
 
@@ -372,70 +400,49 @@ class MainViewModel : ViewModel() {
                 // Use provided parameter or fallback to stored value
                 val preciseFees = usePreciseFees ?: this@MainViewModel.usePreciseFees
 
-                // Create separate async calls with explicit types - each wrapped in try-catch
-                val blockHeightDeferred = async { 
-                    try { NetworkClient.mempoolApi.getBlockHeight() } 
-                    catch (e: Exception) { println("Error fetching block height: ${e.message}"); null }
+                // Fetch volatile data in parallel. Block data comes from one request
+                // where the server supports /api/v1/blocks.
+                val blockDeferred = async {
+                    try { BlockDataProvider.fetchLatestBlock(NetworkClient.mempoolApi) }
+                    catch (e: Exception) { println("Error fetching latest block: ${e.message}"); null }
                 }
                 val mempoolInfoDeferred = async { 
                     try { NetworkClient.mempoolApi.getMempoolInfo() } 
                     catch (e: Exception) { println("Error fetching mempool info: ${e.message}"); null }
                 }
                 val feeRatesDeferred = async { getFeeRates(preciseFees) }
-                val hashrateInfoDeferred = async { 
+
+                // Hashrate and difficulty only change when a new block arrives, so only
+                // request them when the block height has moved (or on the first refresh).
+                val blockSnapshot = blockDeferred.await()
+                val shouldRefreshBlockDerived = lastBlockDerivedHeight == null ||
+                    (blockSnapshot != null && blockSnapshot.height != lastBlockDerivedHeight)
+
+                val hashrateInfoDeferred = if (shouldRefreshBlockDerived) async { 
                     try { NetworkClient.mempoolApi.getHashrateInfo() } 
                     catch (e: Exception) { println("Error fetching hashrate info: ${e.message}"); null }
-                }
-                val difficultyAdjustmentDeferred = async { 
+                } else null
+                val difficultyAdjustmentDeferred = if (shouldRefreshBlockDerived) async { 
                     try { NetworkClient.mempoolApi.getDifficultyAdjustment() } 
                     catch (e: Exception) { println("Error fetching difficulty adjustment: ${e.message}"); null }
-                }
-                
-                // Get block hash and info in parallel
-                val blockHashDeferred = async { 
-                    try { NetworkClient.mempoolApi.getLatestBlockHash() } 
-                    catch (e: Exception) { println("Error fetching block hash: ${e.message}"); null }
-                }
-                val blockHashResponse = blockHashDeferred.await()
-                val blockInfoDeferred = if (blockHashResponse != null && blockHashResponse.isSuccessful) {
-                    try {
-                    blockHashResponse.body()?.let { hash ->
-                        async { 
-                            try { NetworkClient.mempoolApi.getBlockInfo(hash) }
-                            catch (e: Exception) { println("Error fetching block info: ${e.message}"); null }
-                        }
-                        }
-                    } catch (e: Exception) {
-                        println("Error parsing block hash response: ${e.message}")
-                        try {
-                            blockHashResponse.raw().body?.close()
-                        } catch (_: Exception) {}
-                        null
-                    }
                 } else null
 
                 // Await all responses with proper typing
-                val blockHeightResponse = blockHeightDeferred.await()
                 val mempoolInfoResponse = mempoolInfoDeferred.await()
                 val feeRatesResponse = feeRatesDeferred.await()
-                val hashrateInfoResponse = hashrateInfoDeferred.await()
-                val difficultyAdjustmentResponse = difficultyAdjustmentDeferred.await()
-                val blockInfoResponse = blockInfoDeferred?.await()
+                val hashrateInfoResponse = hashrateInfoDeferred?.await()
+                val difficultyAdjustmentResponse = difficultyAdjustmentDeferred?.await()
 
                 // Process each response individually using consolidated error handling
                 var hasAnySuccessfulResponse = false
-                
-                // Process block height
-                if (blockHeightResponse.processBody(
-                    onSuccess = { height -> _blockHeight.value = height },
-                    errorTag = "block height"
-                )) hasAnySuccessfulResponse = true
-                
-                // Process block timestamp
-                blockInfoResponse.processBody(
-                    onSuccess = { info -> _blockTimestamp.value = info.timestamp },
-                    errorTag = "block info"
-                )
+                var blockDerivedSucceeded = false
+
+                // Process block data (one request instead of the tip/hash/info chain)
+                if (blockSnapshot != null) {
+                    _blockHeight.value = blockSnapshot.height
+                    blockSnapshot.timestamp?.let { _blockTimestamp.value = it }
+                    hasAnySuccessfulResponse = true
+                }
 
                 // Process fee rates
                 if (feeRatesResponse.processBody(
@@ -443,33 +450,55 @@ class MainViewModel : ViewModel() {
                     errorTag = "fee rates"
                 )) hasAnySuccessfulResponse = true
                 
-                // Process hashrate info
-                hashrateInfoResponse.processBody(
-                    onSuccess = { info -> _hashrateInfo.value = info },
-                    errorTag = "hashrate info"
-                )
+                // Process hashrate info (only fetched when the block changed)
+                if (hashrateInfoResponse != null) {
+                    if (hashrateInfoResponse.processBody(
+                        onSuccess = { info -> _hashrateInfo.value = info },
+                        errorTag = "hashrate info"
+                    )) blockDerivedSucceeded = true
+                }
                 
-                // Process difficulty adjustment
-                difficultyAdjustmentResponse.processBody(
-                    onSuccess = { adjustment -> _difficultyAdjustment.value = adjustment },
-                    errorTag = "difficulty adjustment"
-                )
+                // Process difficulty adjustment (only fetched when the block changed)
+                if (difficultyAdjustmentResponse != null) {
+                    if (difficultyAdjustmentResponse.processBody(
+                        onSuccess = { adjustment -> _difficultyAdjustment.value = adjustment },
+                        errorTag = "difficulty adjustment"
+                    )) blockDerivedSucceeded = true
+                }
+
+                // Remember the height so block-derived data isn't fetched again until the
+                // next block, unless the fetch failed (then retry on the next refresh).
+                if (shouldRefreshBlockDerived && blockDerivedSucceeded && blockSnapshot != null) {
+                    lastBlockDerivedHeight = blockSnapshot.height
+                }
 
                 // Handle mempool info with fallback logic
                 if (mempoolInfoResponse.processBody(
                     onSuccess = { mempoolInfo ->
-                        // Preserve fallback state if we've used fallback before
-                        val preserveFallbackState = serverNeedsFallback && _mempoolInfo.value?.isUsingFallbackHistogram == true
-                        _mempoolInfo.value = if (preserveFallbackState) {
-                            mempoolInfo.copy(isUsingFallbackHistogram = true)
-                        } else {
-                            mempoolInfo
-                        }
-                        
-                        // Check if we need fallback data (fire and forget - don't block)
-                        if (mempoolInfo.needsHistogramFallback() || serverNeedsFallback) {
+                        if (mempoolInfo.needsHistogramFallback()) {
+                            // Keep showing the last fallback histogram while we refresh it
+                            // (the fetch itself is throttled inside fetchHistogramFallback).
+                            val preserveFallbackState = _mempoolInfo.value?.isUsingFallbackHistogram == true ||
+                                serverNeedsFallback
+                            _mempoolInfo.value = if (preserveFallbackState) {
+                                mempoolInfo.copy(
+                                    feeHistogram = if (mempoolInfo.feeHistogram.isEmpty()) {
+                                        lastFallbackHistogram
+                                    } else {
+                                        mempoolInfo.feeHistogram
+                                    },
+                                    isUsingFallbackHistogram = true
+                                )
+                            } else {
+                                mempoolInfo
+                            }
                             serverNeedsFallback = true
                             fetchHistogramFallback(mempoolInfo)
+                        } else {
+                            // The primary server provides a histogram again; stop
+                            // treating fallback data as the source of truth.
+                            serverNeedsFallback = false
+                            _mempoolInfo.value = mempoolInfo
                         }
                     },
                     errorTag = "mempool info"

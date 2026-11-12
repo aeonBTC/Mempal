@@ -36,8 +36,6 @@ object WidgetEventHandler {
             }
             
             // Process system events as update opportunities
-            Intent.ACTION_SCREEN_ON,
-            Intent.ACTION_POWER_CONNECTED,
             Intent.ACTION_BOOT_COMPLETED,
             Intent.ACTION_MY_PACKAGE_REPLACED -> {
                 Log.d(TAG, "System event received for ${widgetClass.simpleName}: ${intent.action}")

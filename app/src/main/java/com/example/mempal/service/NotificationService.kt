@@ -1,7 +1,6 @@
 package com.example.mempal.service
 
 import android.annotation.SuppressLint
-import android.app.ActivityManager
 import android.app.ForegroundServiceStartNotAllowedException
 import android.app.Notification
 import android.app.NotificationChannel
@@ -10,6 +9,7 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
@@ -18,6 +18,7 @@ import com.example.mempal.api.FeeRates
 import com.example.mempal.api.FeeRatesHelper
 import com.example.mempal.api.MempoolApi
 import com.example.mempal.api.NetworkClient
+import com.example.mempal.api.RateLimitGate
 import com.example.mempal.model.FeeRateType
 import com.example.mempal.repository.SettingsRepository
 import com.example.mempal.tor.TorManager
@@ -25,16 +26,19 @@ import com.example.mempal.tor.TorStatus
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.debounce
 import kotlinx.coroutines.flow.distinctUntilChangedBy
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import okhttp3.ResponseBody.Companion.toResponseBody
 import retrofit2.Response
+import java.util.concurrent.ConcurrentHashMap
 
 class NotificationService : Service() {
     companion object {
@@ -49,6 +53,7 @@ class NotificationService : Service() {
         private const val NOTIFICATION_ID_MEMPOOL_SIZE = 1002
         private const val NOTIFICATION_ID_SPECIFIC_BLOCK = 1003
         private const val NOTIFICATION_ID_TX_CONFIRMATION = 1004
+        private const val INITIAL_CHECK_DELAY_MS = 5_000L
 
         @Volatile
         private var isRunningFlag = false
@@ -57,14 +62,35 @@ class NotificationService : Service() {
             return isRunningFlag
         }
 
+        /**
+         * Starts the service without crashing when Android blocks a foreground-service
+         * start (for example from a background activity/settings emission).
+         */
+        fun start(context: Context): Boolean {
+            return try {
+                val intent = Intent(context, NotificationService::class.java)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+                true
+            } catch (e: Exception) {
+                android.util.Log.e(TAG, "Unable to start notification service: ${e.message}", e)
+                false
+            }
+        }
+
         fun syncServiceState(context: Context) {
             val isRunning = isServiceRunning()
+            if (!isRunning) return
+
             val settingsRepository = SettingsRepository.getInstance(context)
-            
-            // Update settings if they don't match the actual service state
-            if (settingsRepository.settings.value.isServiceEnabled != isRunning) {
+            // Only promote the persisted intent to true; do not clear it just because
+            // the service is between restarts. Explicit stops clear it themselves.
+            if (!settingsRepository.settings.value.isServiceEnabled) {
                 settingsRepository.updateSettings(
-                    settingsRepository.settings.value.copy(isServiceEnabled = isRunning)
+                    settingsRepository.settings.value.copy(isServiceEnabled = true)
                 )
             }
         }
@@ -74,8 +100,9 @@ class NotificationService : Service() {
     private lateinit var settingsRepository: SettingsRepository
     private var api: MempoolApi? = null
     private var lastBlockHeight: Int? = null
-    private val monitoringJobs = mutableMapOf<String, Job>()
-    private var lastCheckTimes = mutableMapOf<String, Long>()
+    private var lastKnownTipHeight: Int? = null
+    private var lastKnownTipTime = 0L
+    private val monitoringJobs = ConcurrentHashMap<String, Job>()
     private var isForegroundStarted = false
     
     // Track previous settings to avoid unnecessary job restarts
@@ -87,6 +114,7 @@ class NotificationService : Service() {
     
     // Data classes for tracking relevant setting changes
     private data class BlockSettingsSnapshot(
+        val enabled: Boolean,
         val newBlockEnabled: Boolean,
         val newBlockFrequency: Int,
         val specificBlockEnabled: Boolean,
@@ -111,6 +139,7 @@ class NotificationService : Service() {
     private data class TxSettingsSnapshot(
         val enabled: Boolean,
         val frequency: Int,
+        val targetConfirmations: Int,
         val transactionId: String
     )
     
@@ -163,6 +192,14 @@ class NotificationService : Service() {
 
         startForegroundSafely()
         
+        // Now that the service is foreground, starting TorService is allowed.
+        if (torManager.isTorEnabled() &&
+            torManager.torStatus.value != TorStatus.CONNECTED &&
+            torManager.torStatus.value != TorStatus.CONNECTING
+        ) {
+            torManager.startTor(applicationContext)
+        }
+
         // Initialize API and start monitoring asynchronously
         serviceScope.launch {
             // Wait for NetworkClient to be initialized before accessing API
@@ -209,12 +246,10 @@ class NotificationService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP_SERVICE -> {
-                // Update settings to show service is disabled
-                serviceScope.launch {
-                    settingsRepository.updateSettings(
-                        settingsRepository.settings.value.copy(isServiceEnabled = false)
-                    )
-                }
+                // Persist the user's intent synchronously before the service stops.
+                settingsRepository.updateSettings(
+                    settingsRepository.settings.value.copy(isServiceEnabled = false)
+                )
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -234,7 +269,15 @@ class NotificationService : Service() {
             
             // Always try to start foreground, even if already started
             // This ensures notification is shown if service was started before permission was granted
-            startForeground(NOTIFICATION_ID, notification)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
             isForegroundStarted = true
             android.util.Log.d(TAG, "Foreground service started successfully with notification")
         } catch (e: Exception) {
@@ -262,6 +305,7 @@ class NotificationService : Service() {
 
     // Data class to group all monitoring-relevant settings for distinctUntilChanged filtering
     private data class MonitoringSettings(
+        val blockEnabled: Boolean,
         val newBlockEnabled: Boolean,
         val newBlockFrequency: Int,
         val specificBlockEnabled: Boolean,
@@ -278,16 +322,21 @@ class NotificationService : Service() {
         val feeAboveThreshold: Boolean,
         val txEnabled: Boolean,
         val txFrequency: Int,
+        val txTargetConfirmations: Int,
         val txId: String
     )
     
+    @OptIn(FlowPreview::class)
     private fun startMonitoring() {
         serviceScope.launch {
             // Monitor only monitoring-relevant setting changes using distinctUntilChangedBy
             // This prevents unnecessary re-collection for unrelated setting changes (e.g. usePreciseFees)
             settingsRepository.settings
+                // Let rapid typing in a settings field settle before restarting jobs.
+                .debounce(300)
                 .distinctUntilChangedBy { settings ->
                     MonitoringSettings(
+                        blockEnabled = settings.blockNotificationsEnabled,
                         newBlockEnabled = settings.newBlockNotificationEnabled,
                         newBlockFrequency = settings.newBlockCheckFrequency,
                         specificBlockEnabled = settings.specificBlockNotificationEnabled,
@@ -304,6 +353,7 @@ class NotificationService : Service() {
                         feeAboveThreshold = settings.feeRateAboveThreshold,
                         txEnabled = settings.txConfirmationEnabled,
                         txFrequency = settings.txConfirmationFrequency,
+                        txTargetConfirmations = settings.targetConfirmations,
                         txId = settings.transactionId
                     )
                 }
@@ -313,6 +363,7 @@ class NotificationService : Service() {
                 
                 // Create snapshots of current settings for each job type
                 val currentBlockSettings = BlockSettingsSnapshot(
+                    enabled = settings.blockNotificationsEnabled,
                     newBlockEnabled = settings.newBlockNotificationEnabled,
                     newBlockFrequency = settings.newBlockCheckFrequency,
                     specificBlockEnabled = settings.specificBlockNotificationEnabled,
@@ -337,6 +388,7 @@ class NotificationService : Service() {
                 val currentTxSettings = TxSettingsSnapshot(
                     enabled = settings.txConfirmationEnabled,
                     frequency = settings.txConfirmationFrequency,
+                    targetConfirmations = settings.targetConfirmations,
                     transactionId = settings.transactionId
                 )
                 
@@ -346,7 +398,6 @@ class NotificationService : Service() {
                     android.util.Log.d(TAG, "Time unit changed from $previousTimeUnit to $timeUnit, restarting all jobs")
                     monitoringJobs.values.forEach { it.cancel() }
                     monitoringJobs.clear()
-                    lastCheckTimes.clear()
                 }
                 previousTimeUnit = timeUnit
 
@@ -358,10 +409,11 @@ class NotificationService : Service() {
                     }
                     monitoringJobs["blocks"]?.cancel()
                     monitoringJobs.remove("blocks")
-                    lastCheckTimes.remove("blocks")
                     
-                    val newBlockEnabled = settings.newBlockNotificationEnabled && settings.newBlockCheckFrequency > 0
-                    val specificBlockEnabled = settings.specificBlockNotificationEnabled && 
+                    val blocksEnabled = settings.blockNotificationsEnabled
+                    val newBlockEnabled = blocksEnabled && settings.newBlockNotificationEnabled && settings.newBlockCheckFrequency > 0
+                    val specificBlockEnabled = blocksEnabled && 
+                        settings.specificBlockNotificationEnabled && 
                         settings.specificBlockCheckFrequency > 0 && 
                         settings.targetBlockHeight != null
                     
@@ -376,18 +428,12 @@ class NotificationService : Service() {
                         android.util.Log.d(TAG, "Starting blocks monitoring job. newBlockEnabled=$newBlockEnabled, specificBlockEnabled=$specificBlockEnabled, frequency=$blockCheckFrequency $timeUnit")
                         
                         monitoringJobs["blocks"] = launch {
-                            delay(blockCheckFrequency * delayMultiplier)
+                            var firstCheck = true
                             while (isActive) {
-                                val now = System.currentTimeMillis()
-                                val lastCheck = lastCheckTimes["blocks"] ?: 0L
-                                val interval = blockCheckFrequency * delayMultiplier
-
-                                if (now - lastCheck >= interval) {
-                                    android.util.Log.d(TAG, "Checking blocks. Interval: $blockCheckFrequency $timeUnit")
-                                    checkNewBlocks()
-                                    lastCheckTimes["blocks"] = now
-                                }
-                                delay(1000)
+                                delay(if (firstCheck) INITIAL_CHECK_DELAY_MS else blockCheckFrequency * delayMultiplier)
+                                firstCheck = false
+                                android.util.Log.d(TAG, "Checking blocks. Interval: $blockCheckFrequency $timeUnit")
+                                checkNewBlocks()
                             }
                         }
                     }
@@ -402,24 +448,17 @@ class NotificationService : Service() {
                     }
                     monitoringJobs["mempoolSize"]?.cancel()
                     monitoringJobs.remove("mempoolSize")
-                    lastCheckTimes.remove("mempoolSize")
                     
                     if (settings.mempoolSizeNotificationsEnabled && 
                         settings.mempoolCheckFrequency > 0 && 
                         settings.mempoolSizeThreshold > 0) {
                         monitoringJobs["mempoolSize"] = launch {
-                            delay(settings.mempoolCheckFrequency * delayMultiplier)
+                            var firstCheck = true
                             while (isActive) {
-                                val now = System.currentTimeMillis()
-                                val lastCheck = lastCheckTimes["mempoolSize"] ?: 0L
-                                val interval = settings.mempoolCheckFrequency * delayMultiplier
-
-                                if (now - lastCheck >= interval) {
-                                    android.util.Log.d(TAG, "Checking mempool size. Interval: ${settings.mempoolCheckFrequency} $timeUnit")
-                                    checkMempoolSize(settings.mempoolSizeThreshold)
-                                    lastCheckTimes["mempoolSize"] = now
-                                }
-                                delay(1000)
+                                delay(if (firstCheck) INITIAL_CHECK_DELAY_MS else settings.mempoolCheckFrequency * delayMultiplier)
+                                firstCheck = false
+                                android.util.Log.d(TAG, "Checking mempool size. Interval: ${settings.mempoolCheckFrequency} $timeUnit")
+                                checkMempoolSize(settings.mempoolSizeThreshold)
                             }
                         }
                     }
@@ -434,24 +473,17 @@ class NotificationService : Service() {
                     }
                     monitoringJobs["feeRates"]?.cancel()
                     monitoringJobs.remove("feeRates")
-                    lastCheckTimes.remove("feeRates")
                     
                     if (settings.feeRatesNotificationsEnabled && 
                         settings.feeRatesCheckFrequency > 0 && 
                         settings.feeRateThreshold > 0) {
                         monitoringJobs["feeRates"] = launch {
-                            delay(settings.feeRatesCheckFrequency * delayMultiplier)
+                            var firstCheck = true
                             while (isActive) {
-                                val now = System.currentTimeMillis()
-                                val lastCheck = lastCheckTimes["feeRates"] ?: 0L
-                                val interval = settings.feeRatesCheckFrequency * delayMultiplier
-
-                                if (now - lastCheck >= interval) {
-                                    android.util.Log.d(TAG, "Checking fee rates. Interval: ${settings.feeRatesCheckFrequency} $timeUnit")
-                                    checkFeeRates(settings.selectedFeeRateType, settings.feeRateThreshold)
-                                    lastCheckTimes["feeRates"] = now
-                                }
-                                delay(1000)
+                                delay(if (firstCheck) INITIAL_CHECK_DELAY_MS else settings.feeRatesCheckFrequency * delayMultiplier)
+                                firstCheck = false
+                                android.util.Log.d(TAG, "Checking fee rates. Interval: ${settings.feeRatesCheckFrequency} $timeUnit")
+                                checkFeeRates(settings.selectedFeeRateType, settings.feeRateThreshold)
                             }
                         }
                     }
@@ -466,28 +498,21 @@ class NotificationService : Service() {
                     }
                     monitoringJobs["txConfirmation"]?.cancel()
                     monitoringJobs.remove("txConfirmation")
-                    lastCheckTimes.remove("txConfirmation")
                     
                     if (settings.txConfirmationEnabled && 
                         settings.txConfirmationFrequency > 0 && 
                         settings.transactionId.isNotEmpty() && 
                         settings.transactionId.length >= 64) {
                         monitoringJobs["txConfirmation"] = launch {
-                            delay(settings.txConfirmationFrequency * delayMultiplier)
+                            var firstCheck = true
                             while (isActive) {
-                                val now = System.currentTimeMillis()
-                                val lastCheck = lastCheckTimes["txConfirmation"] ?: 0L
-                                val interval = settings.txConfirmationFrequency * delayMultiplier
-
-                                if (now - lastCheck >= interval) {
-                                    android.util.Log.d(TAG, "Checking transaction confirmation. Interval: ${settings.txConfirmationFrequency} $timeUnit")
-                                    checkTransactionConfirmation(settings.transactionId)
-                                    lastCheckTimes["txConfirmation"] = now
-                                }
-                            delay(1000)
+                                delay(if (firstCheck) INITIAL_CHECK_DELAY_MS else settings.txConfirmationFrequency * delayMultiplier)
+                                firstCheck = false
+                                android.util.Log.d(TAG, "Checking transaction confirmation. Interval: ${settings.txConfirmationFrequency} $timeUnit, Target: ${settings.targetConfirmations}")
+                                checkTransactionConfirmation(settings.transactionId, settings.targetConfirmations)
+                            }
                         }
                     }
-                }
                 }
                 previousTxSettings = currentTxSettings
             }
@@ -496,14 +521,13 @@ class NotificationService : Service() {
 
     @SuppressLint("DefaultLocale")
     private suspend fun checkMempoolSize(threshold: Float) {
+        if (RateLimitGate.isAnyBlocked()) {
+            android.util.Log.d(TAG, "Skipping mempool size check: rate limit backoff active")
+            return
+        }
         try {
             android.util.Log.d(TAG, "Making mempool size API call...")
             val settings = settingsRepository.settings.first()
-
-            // Remove this early return
-            // if (settings.hasNotifiedForMempoolSize) {
-            //     return
-            // }
 
             val currentApi = getApi() ?: return
             val mempoolInfo = currentApi.getMempoolInfo()
@@ -519,16 +543,27 @@ class NotificationService : Service() {
                     }
 
                     if (shouldNotify) {
-                        val condition = if (settings.mempoolSizeAboveThreshold) "risen above" else "fallen below"
-                        // Generate unique notification ID based on settings
-                        // This allows new notifications when settings change while preventing spam for same settings
-                        val notificationId = NOTIFICATION_ID_MEMPOOL_SIZE + 
-                            (threshold.hashCode() xor settings.mempoolSizeAboveThreshold.hashCode())
-                        showNotificationWithId(
-                            "Mempool Size Alert",
-                            "Mempool size has $condition $threshold vMB and is now ${String.format("%.2f", currentSize)} vMB",
-                            notificationId,
-                            checkDismissal = true
+                        // Only alert on the transition into the condition; reset the
+                        // latch when the condition clears so it can alert again later.
+                        if (!settings.hasNotifiedForMempoolSize) {
+                            val condition = if (settings.mempoolSizeAboveThreshold) "risen above" else "fallen below"
+                            // Generate unique notification ID based on settings
+                            // This allows new notifications when settings change while preventing spam for same settings
+                            val notificationId = NOTIFICATION_ID_MEMPOOL_SIZE + 
+                                (threshold.hashCode() xor settings.mempoolSizeAboveThreshold.hashCode())
+                            showNotificationWithId(
+                                "Mempool Size Alert",
+                                "Mempool size has $condition $threshold vMB and is now ${String.format("%.2f", currentSize)} vMB",
+                                notificationId,
+                                checkDismissal = true
+                            )
+                            settingsRepository.updateSettings(
+                                settingsRepository.settings.value.copy(hasNotifiedForMempoolSize = true)
+                            )
+                        }
+                    } else if (settings.hasNotifiedForMempoolSize) {
+                        settingsRepository.updateSettings(
+                            settingsRepository.settings.value.copy(hasNotifiedForMempoolSize = false)
                         )
                     }
                 }
@@ -544,6 +579,10 @@ class NotificationService : Service() {
     }
 
     private suspend fun checkFeeRates(feeRateType: FeeRateType, threshold: Double) {
+        if (RateLimitGate.isAnyBlocked()) {
+            android.util.Log.d(TAG, "Skipping fee rate check: rate limit backoff active")
+            return
+        }
         try {
             android.util.Log.d(TAG, "Making fee rates API call...")
             val settings = settingsRepository.settings.first()
@@ -574,35 +613,44 @@ class NotificationService : Service() {
                     }
 
                     if (shouldNotify) {
-                        val feeRateTypeString = when (feeRateType) {
-                            FeeRateType.NEXT_BLOCK -> "Next Block"
-                            FeeRateType.THREE_BLOCKS -> "3 Block"
-                            FeeRateType.SIX_BLOCKS -> "6 Block"
-                            FeeRateType.DAY_BLOCKS -> "1 Day"
+                        if (!settings.hasNotifiedForFeeRate) {
+                            val feeRateTypeString = when (feeRateType) {
+                                FeeRateType.NEXT_BLOCK -> "Next Block"
+                                FeeRateType.THREE_BLOCKS -> "3 Block"
+                                FeeRateType.SIX_BLOCKS -> "6 Block"
+                                FeeRateType.DAY_BLOCKS -> "1 Day"
+                            }
+                            val condition = if (settings.feeRateAboveThreshold) "risen above" else "fallen below"
+                            
+                            // Format fee rates to show max 2 decimal places
+                            val formattedThreshold = if (threshold % 1.0 == 0.0) {
+                                threshold.toInt().toString()
+                            } else {
+                                String.format(java.util.Locale.US, "%.2f", threshold)
+                            }
+                            val formattedCurrentRate = if (currentRate % 1.0 == 0.0) {
+                                currentRate.toInt().toString()
+                            } else {
+                                String.format(java.util.Locale.US, "%.2f", currentRate)
+                            }
+                            
+                            // Generate unique notification ID based on settings
+                            // This allows new notifications when settings change while preventing spam for same settings
+                            val notificationId = NOTIFICATION_ID_FEE_RATE + 
+                                (threshold.hashCode() xor feeRateType.hashCode() xor settings.feeRateAboveThreshold.hashCode())
+                            showNotificationWithId(
+                                "Fee Rate Alert",
+                                "$feeRateTypeString fee rate has $condition $formattedThreshold sat/vB and is currently at $formattedCurrentRate sat/vB",
+                                notificationId,
+                                checkDismissal = true
+                            )
+                            settingsRepository.updateSettings(
+                                settingsRepository.settings.value.copy(hasNotifiedForFeeRate = true)
+                            )
                         }
-                        val condition = if (settings.feeRateAboveThreshold) "risen above" else "fallen below"
-                        
-                        // Format fee rates to show max 2 decimal places
-                        val formattedThreshold = if (threshold % 1.0 == 0.0) {
-                            threshold.toInt().toString()
-                        } else {
-                            String.format(java.util.Locale.US, "%.2f", threshold)
-                        }
-                        val formattedCurrentRate = if (currentRate % 1.0 == 0.0) {
-                            currentRate.toInt().toString()
-                        } else {
-                            String.format(java.util.Locale.US, "%.2f", currentRate)
-                        }
-                        
-                        // Generate unique notification ID based on settings
-                        // This allows new notifications when settings change while preventing spam for same settings
-                        val notificationId = NOTIFICATION_ID_FEE_RATE + 
-                            (threshold.hashCode() xor feeRateType.hashCode() xor settings.feeRateAboveThreshold.hashCode())
-                        showNotificationWithId(
-                            "Fee Rate Alert",
-                            "$feeRateTypeString fee rate has $condition $formattedThreshold sat/vB and is currently at $formattedCurrentRate sat/vB",
-                            notificationId,
-                            checkDismissal = true
+                    } else if (settings.hasNotifiedForFeeRate) {
+                        settingsRepository.updateSettings(
+                            settingsRepository.settings.value.copy(hasNotifiedForFeeRate = false)
                         )
                     }
                 }
@@ -618,9 +666,18 @@ class NotificationService : Service() {
     }
 
     private suspend fun checkNewBlocks() {
+        if (RateLimitGate.isAnyBlocked()) {
+            android.util.Log.d(TAG, "Skipping block check: rate limit backoff active")
+            return
+        }
         try {
             android.util.Log.d(TAG, "Making block height API call...")
             val settings = settingsRepository.settings.first()
+
+            // Master switch off means no block monitoring at all.
+            if (!settings.blockNotificationsEnabled) {
+                return
+            }
 
             // Skip if neither notification is enabled
             if (!settings.newBlockNotificationEnabled && !settings.specificBlockNotificationEnabled) {
@@ -634,6 +691,8 @@ class NotificationService : Service() {
                 android.util.Log.d(TAG, "Current block height: $currentHeight, Last height: $lastBlockHeight")
 
                 if (currentHeight != null) {
+                    lastKnownTipHeight = currentHeight
+                    lastKnownTipTime = System.currentTimeMillis()
                     // Check for new block notification
                     if (settings.newBlockNotificationEnabled) {
                         if (lastBlockHeight != null && currentHeight > lastBlockHeight!!) {
@@ -666,7 +725,7 @@ class NotificationService : Service() {
                                 notificationId
                             )
                             settingsRepository.updateSettings(
-                                settings.copy(hasNotifiedForTargetBlock = true)
+                                settingsRepository.settings.value.copy(hasNotifiedForTargetBlock = true)
                             )
                         }
                     }
@@ -684,7 +743,35 @@ class NotificationService : Service() {
         }
     }
 
-    private suspend fun checkTransactionConfirmation(txid: String) {
+    /**
+     * Number of confirmations for a transaction included in [blockHeight].
+     * The transaction API only returns the inclusion height, so the chain tip
+     * is required to derive the current confirmation count.
+     */
+    private suspend fun getConfirmationCount(api: MempoolApi, blockHeight: Int): Int? {
+        // Reuse the tip fetched by the block monitor when it is fresh.
+        val cachedTip = lastKnownTipHeight
+        val now = System.currentTimeMillis()
+        if (cachedTip != null && now - lastKnownTipTime < 60_000L) {
+            return (cachedTip - blockHeight + 1).coerceAtLeast(0)
+        }
+
+        val tipResponse = api.getBlockHeight()
+        if (!tipResponse.isSuccessful) {
+            android.util.Log.e(TAG, "Block height API call failed: ${tipResponse.errorBody()?.string()}")
+            return null
+        }
+        val tipHeight = tipResponse.body() ?: return null
+        lastKnownTipHeight = tipHeight
+        lastKnownTipTime = now
+        return (tipHeight - blockHeight + 1).coerceAtLeast(0)
+    }
+
+    private suspend fun checkTransactionConfirmation(txid: String, targetConfirmations: Int) {
+        if (RateLimitGate.isAnyBlocked()) {
+            android.util.Log.d(TAG, "Skipping transaction check: rate limit backoff active")
+            return
+        }
         try {
             val settings = settingsRepository.settings.first()
             if (settings.hasNotifiedForCurrentTx) {
@@ -693,32 +780,52 @@ class NotificationService : Service() {
 
             val currentApi = getApi() ?: return
             val response = currentApi.getTransaction(txid)
-            if (response.isSuccessful) {
-                val transaction = response.body()
-                if (transaction?.status?.confirmed == true) {
-                    // Generate unique notification ID based on txid
-                    // This allows new notifications when txid changes while preventing spam for same txid
-                    val notificationId = NOTIFICATION_ID_TX_CONFIRMATION + txid.hashCode()
-                    
-                    // Only notify if user has dismissed previous notification for this txid
-                    if (!isNotificationActive(notificationId)) {
-                        // Format txid: first 4 and last 4 characters
-                        val txidPreview = if (txid.length >= 8) {
-                            "${txid.take(4)}...${txid.takeLast(4)}"
-                        } else {
-                            txid // Fallback for short txids (shouldn't happen for valid Bitcoin txids)
-                        }
-                        showNotificationWithId(
-                            "Transaction Confirmed",
-                            "Your transaction has been confirmed in block ${transaction.status.block_height} (TxID: $txidPreview)",
-                            notificationId
-                        )
-                        settingsRepository.updateSettings(
-                            settings.copy(hasNotifiedForCurrentTx = true)
-                        )
-                    }
-                }
+            if (!response.isSuccessful) {
+                android.util.Log.e(TAG, "Transaction API call failed: ${response.errorBody()?.string()}")
+                return
             }
+
+            val transaction = response.body()
+            if (transaction?.status?.confirmed != true) {
+                return
+            }
+
+            val requiredConfirmations = targetConfirmations.coerceAtLeast(1)
+            val confirmations = getConfirmationCount(currentApi, transaction.status.block_height)
+            if (confirmations == null) {
+                return
+            }
+            android.util.Log.d(TAG, "Transaction $txid has $confirmations confirmations (target: $requiredConfirmations)")
+
+            if (confirmations < requiredConfirmations) {
+                return
+            }
+
+            // Generate unique notification ID based on txid and confirmation target.
+            // This allows new notifications when either changes while preventing spam for the same target.
+            val notificationId = NOTIFICATION_ID_TX_CONFIRMATION + txid.hashCode() + requiredConfirmations
+
+            // Only notify if user has dismissed previous notification for this txid/target
+            if (isNotificationActive(notificationId)) {
+                return
+            }
+
+            // Format txid: first 4 and last 4 characters
+            val txidPreview = if (txid.length >= 8) {
+                "${txid.take(4)}...${txid.takeLast(4)}"
+            } else {
+                txid // Fallback for short txids (shouldn't happen for valid Bitcoin txids)
+            }
+            val confirmationLabel = if (confirmations == 1) "confirmation" else "confirmations"
+            showNotificationWithId(
+                "Transaction Confirmed",
+                "Your transaction has reached $confirmations $confirmationLabel in block " +
+                    "${transaction.status.block_height} (TxID: $txidPreview)",
+                notificationId
+            )
+            settingsRepository.updateSettings(
+                settingsRepository.settings.value.copy(hasNotifiedForCurrentTx = true)
+            )
         } catch (_: CancellationException) {
             // Job was cancelled due to settings change - this is expected, just log at debug level
             android.util.Log.d(TAG, "Transaction confirmation check cancelled (settings changed)")
@@ -848,24 +955,9 @@ class NotificationService : Service() {
         // Stop Tor foreground service
         TorManager.getInstance().stopForegroundService(applicationContext)
 
-        // Only update settings if service is actually being destroyed (not restarted)
-        if (!isServiceRestarting()) {
-            settingsRepository.settings.value.let { currentSettings ->
-                settingsRepository.updateSettings(currentSettings.copy(isServiceEnabled = false))
-            }
-        }
+        // Leave isServiceEnabled alone here. It represents the user's intent; the
+        // explicit stop action clears it. This lets the app restart monitoring after
+        // a process death or reboot.
         lastBlockHeight = null
-    }
-
-    private fun isServiceRestarting(): Boolean {
-        // Check if service is being restarted by system
-        return try {
-            val manager = getSystemService(ACTIVITY_SERVICE) as ActivityManager
-            manager.runningAppProcesses?.any {
-                it.processName == packageName && it.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_SERVICE
-            } == true
-        } catch (_: Exception) {
-            false
-        }
     }
 }

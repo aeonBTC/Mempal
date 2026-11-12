@@ -1,7 +1,6 @@
 package com.example.mempal.cache
 
 import com.example.mempal.api.FeeRates
-import com.example.mempal.api.HashrateInfo
 import com.example.mempal.api.MempoolInfo
 
 // Singleton object to store dashboard data in memory
@@ -10,7 +9,6 @@ object DashboardCache {
     private var cachedBlockTimestamp: Long? = null
     private var cachedFeeRates: FeeRates? = null
     private var cachedMempoolInfo: MempoolInfo? = null
-    private var cachedHashrateInfo: HashrateInfo? = null
 
     // Save all dashboard data at once
     fun saveState(
@@ -23,7 +21,6 @@ object DashboardCache {
         cachedBlockTimestamp = blockTimestamp
         cachedFeeRates = feeRates
         cachedMempoolInfo = mempoolInfo
-        cachedHashrateInfo = null
     }
 
     // Get cached state
@@ -32,8 +29,7 @@ object DashboardCache {
             blockHeight = cachedBlockHeight,
             blockTimestamp = cachedBlockTimestamp,
             mempoolInfo = cachedMempoolInfo,
-            feeRates = cachedFeeRates,
-            hashrateInfo = cachedHashrateInfo
+            feeRates = cachedFeeRates
         )
     }
 
@@ -42,8 +38,7 @@ object DashboardCache {
         return cachedBlockHeight != null || 
                cachedBlockTimestamp != null || 
                cachedFeeRates != null || 
-               cachedMempoolInfo != null ||
-               cachedHashrateInfo != null
+               cachedMempoolInfo != null
     }
 
     // Clear cache (useful when app is closing)
@@ -52,7 +47,6 @@ object DashboardCache {
         cachedBlockTimestamp = null
         cachedFeeRates = null
         cachedMempoolInfo = null
-        cachedHashrateInfo = null
     }
 }
 
@@ -61,6 +55,5 @@ data class DashboardState(
     val blockHeight: Int?,
     val blockTimestamp: Long?,
     val mempoolInfo: MempoolInfo?,
-    val feeRates: FeeRates?,
-    val hashrateInfo: HashrateInfo?
-) 
+    val feeRates: FeeRates?
+)
